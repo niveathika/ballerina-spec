@@ -147,9 +147,9 @@ public type EdiSchema record {|
 # Result of `envelopeFromEdiString`. Contains parsed header and trailer segments
 # with body segments left as raw strings for downstream processing.
 public type EdiEnvelope record {|
-    json headers;
+    record {} headers;
     string[] body;
-    json trailers;
+    record {} trailers;
 |};
 ```
 
@@ -202,11 +202,12 @@ Returns an error if `schema.headerSegments` is empty (old schema guard).
 
 #### 4. `envelopeFromEdiString` — Schema-driven fail-safe envelope parse
 
-Parses the full envelope hierarchy — `headerSegments` (e.g., ISA + GS + ST for X12, UNB + UNG + UNH for EDIFACT), collects body segment strings (unparsed), then parses `trailerSegments` (e.g., SE + GE + IEA for X12, UNT + UNE + UNZ for EDIFACT). **Fail-safe**: malformed body segments are preserved as-is rather than causing the entire parse to fail.
+Parses the full envelope hierarchy — `headerSegments` (e.g., ISA + GS + ST for X12, UNB + UNG + UNH for EDIFACT), collects body segment strings (unparsed), then parses `trailerSegments` (e.g., SE + GE + IEA for X12, UNT + UNE + UNZ for EDIFACT). The envelope (headers and trailers) is parsed fail-fast — malformed envelope segments produce an error. **Fail-safe behavior applies only to the body**: malformed transaction segments are preserved as raw strings rather than causing the entire parse to fail.
 
 ```ballerina
 # Parses the full envelope hierarchy (e.g., ISA+GS+ST / SE+GE+IEA for X12)
-# and returns body as raw segment strings. Fail-safe: tolerates malformed body content.
+# and returns body as raw segment strings.
+# Envelope (headers/trailers) is fail-fast; body is fail-safe (tolerates malformed transactions).
 #
 # + ediText - raw EDI text
 # + schema - EDI schema (must have non-empty headerSegments and trailerSegments)
