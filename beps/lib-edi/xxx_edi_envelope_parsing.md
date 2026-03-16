@@ -17,11 +17,11 @@ Introduce a tiered EDI parsing API to `ballerina/edi` that allows consumers to r
 
 ## Goals
 
-- Provide schema-free APIs (`peekX12Headers`, `peekEdifactHeaders`) for extracting X12 and EDIFACT envelope headers at configurable depth without loading a schema.
+- Provide schema-free APIs (`peekX12Headers`, `peekEdifactHeaders`) for extracting X12 and EDIFACT interchange-level headers without loading a schema.
 - Provide a schema-driven API (`headersFromEdiString`) that stops parsing immediately after the header segments, for use inside generated libs and custom schemas.
 - Provide a schema-driven fail-safe API (`envelopeFromEdiString`) that parses the envelope structure up to the transaction level, tolerating malformed transactions.
 - Retain the existing schema-driven fail-fast API (`fromEdiString`) for full deep parsing.
-- Define standard Ballerina record types for X12 (`X12Interchange`, `X12Group`, `X12Transaction`) and EDIFACT (`EdifactInterchange`, `EdifactGroup`, `EdifactMessage`) envelope elements, reusable across generated libraries.
+- Define standard Ballerina record types for X12 (`X12Isa`, `X12Gs`, `X12Headers`) and EDIFACT (`EdifactUnb`, `EdifactUnh`, `EdifactHeaders`) envelope elements, reusable across generated libraries.
 - Add `headerSegments` and `trailerSegments` fields to `EdiSchema` so envelope segments are handled explicitly rather than silently ignored.
 - Update `edi-tools` to auto-populate `headerSegments` and `trailerSegments` during X12 XSD and EDIFACT schema conversion, and generate typed envelope API wrappers in codegen output.
 - Maintain full backward compatibility: `fromEdiString` is unchanged; old schemas (without `headerSegments`/`trailerSegments`) continue to work.
@@ -29,6 +29,7 @@ Introduce a tiered EDI parsing API to `ballerina/edi` that allows consumers to r
 
 ## Non-Goals
 
+- Depth-based envelope peeking (parsing groups, transactions, or messages within peek APIs). The peek APIs return only interchange-level headers; deeper envelope parsing is deferred to future work.
 - Implementing `peekSegments()` for raw segment-level access (deferred to future work).
 - Changing the serialization path (`toEdiString`).
 
@@ -49,19 +50,9 @@ The EDI ecosystem (X12, EDIFACT) explicitly separates the interchange envelope f
 
 ### Standard Envelope Types
 
-#### X12 Enums and Records
+#### X12 Records
 
 ```ballerina
-# Controls how deep the schema-free peek parses into the X12 envelope hierarchy.
-public enum X12PeekDepth {
-    # Parse ISA/IEA only. Groups and transactions remain as raw strings.
-    INTERCHANGE,
-    # Parse ISA/IEA and GS/GE. Transactions remain as raw strings.
-    GROUP,
-    # Parse ISA/IEA, GS/GE, and ST/SE. Transaction body segments remain as raw strings.
-    TRANSACTION
-}
-
 # Interchange Control Header (ISA).
 public type X12Isa record {|
     string authorizationQualifier;       // ISA01
@@ -82,12 +73,6 @@ public type X12Isa record {|
     string componentSeparator;           // ISA16
 |};
 
-# Interchange Control Trailer (IEA).
-public type X12Iea record {|
-    string groupCount;                   // IEA01
-    string controlNumber;                // IEA02
-|};
-
 # Functional Group Header (GS).
 public type X12Gs record {|
     string functionalCode;               // GS01
@@ -100,67 +85,17 @@ public type X12Gs record {|
     string versionCode;                  // GS08
 |};
 
-# Functional Group Trailer (GE).
-public type X12Ge record {|
-    string transactionSetCount;          // GE01
-    string controlNumber;                // GE02
-|};
-
-# Transaction Set Header (ST).
-public type X12St record {|
-    string transactionSetCode;           // ST01
-    string controlNumber;                // ST02
-    string implementationGuide?;         // ST03
-|};
-
-# Transaction Set Trailer (SE).
-public type X12Se record {|
-    string segmentCount;                 // SE01
-    string controlNumber;                // SE02
-|};
-
-# X12 interchange envelope returned by `peekX12Headers`.
-# At `INTERCHANGE` depth, `rawContent` is populated with unparsed lines between ISA and IEA.
-# At `GROUP` or `TRANSACTION` depth, `groups` is populated instead.
-public type X12Interchange record {|
+# X12 envelope headers returned by `peekX12Headers`.
+# Contains ISA (always present) and optionally GS (if a functional group follows ISA).
+public type X12Headers record {|
     X12Isa isa;
-    X12Iea iea;
-    X12Group[] groups?;
-    string[] rawContent?;
-|};
-
-# X12 functional group.
-# At `GROUP` depth, `rawContent` contains unparsed transaction strings.
-# At `TRANSACTION` depth, `transactions` is populated instead.
-public type X12Group record {|
-    X12Gs gs;
-    X12Ge ge;
-    X12Transaction[] transactions?;
-    string[] rawContent?;
-|};
-
-# X12 transaction set. Body segments are always raw strings.
-# Use `fromEdiString` for full schema-driven parsing of transaction body.
-public type X12Transaction record {|
-    X12St st;
-    X12Se se;
-    string[] rawSegments;
+    X12Gs gs?;
 |};
 ```
 
-#### EDIFACT Enums and Records
+#### EDIFACT Records
 
 ```ballerina
-# Controls how deep the schema-free peek parses into the EDIFACT envelope hierarchy.
-public enum EdifactPeekDepth {
-    # Parse UNB/UNZ only. Groups and messages remain as raw strings.
-    INTERCHANGE,
-    # Parse UNB/UNZ and UNG/UNE. Messages remain as raw strings.
-    GROUP,
-    # Parse UNB/UNZ, UNG/UNE, and UNH/UNT. Message body segments remain as raw strings.
-    MESSAGE
-}
-
 # Interchange Header (UNB).
 public type EdifactUnb record {|
     string syntaxIdentifier;             // UNB01
@@ -175,30 +110,6 @@ public type EdifactUnb record {|
     string applicationReference?;        // UNB07
 |};
 
-# Interchange Trailer (UNZ).
-public type EdifactUnz record {|
-    string interchangeCount;             // UNZ01
-    string controlReference;             // UNZ02
-|};
-
-# Group Header (UNG).
-public type EdifactUng record {|
-    string groupIdentification;          // UNG01
-    string senderIdentification;         // UNG02
-    string recipientIdentification;      // UNG03
-    string date;                         // UNG04-1
-    string time;                         // UNG04-2
-    string controlReference;             // UNG05
-    string controllingAgency;            // UNG06
-    string messageVersion;               // UNG07
-|};
-
-# Group Trailer (UNE).
-public type EdifactUne record {|
-    string groupCount;                   // UNE01
-    string controlReference;             // UNE02
-|};
-
 # Message Header (UNH).
 public type EdifactUnh record {|
     string messageReferenceNumber;       // UNH01
@@ -208,38 +119,11 @@ public type EdifactUnh record {|
     string controllingAgency;            // UNH02-4
 |};
 
-# Message Trailer (UNT).
-public type EdifactUnt record {|
-    string segmentCount;                 // UNT01
-    string messageReferenceNumber;       // UNT02
-|};
-
-# EDIFACT interchange envelope returned by `peekEdifactHeaders`.
-# At `INTERCHANGE` depth, `rawContent` is populated with unparsed lines between UNB and UNZ.
-# At `GROUP` or `MESSAGE` depth, `groups` is populated instead.
-public type EdifactInterchange record {|
+# EDIFACT envelope headers returned by `peekEdifactHeaders`.
+# Contains UNB (always present) and optionally UNH (if a message header follows).
+public type EdifactHeaders record {|
     EdifactUnb unb;
-    EdifactUnz unz;
-    EdifactGroup[] groups?;
-    string[] rawContent?;
-|};
-
-# EDIFACT functional group.
-# At `GROUP` depth, `rawContent` contains unparsed message strings.
-# At `MESSAGE` depth, `messages` is populated instead.
-public type EdifactGroup record {|
-    EdifactUng ung;
-    EdifactUne une;
-    EdifactMessage[] messages?;
-    string[] rawContent?;
-|};
-
-# EDIFACT message. Body segments are always raw strings.
-# Use `fromEdiString` for full schema-driven parsing of message body.
-public type EdifactMessage record {|
-    EdifactUnh unh;
-    EdifactUnt unt;
-    string[] rawSegments;
+    EdifactUnh unh?;
 |};
 ```
 
@@ -273,37 +157,33 @@ public type EdiEnvelope record {|
 
 The API introduces five functions spanning schema-free and schema-driven usage:
 
-#### 1. `peekX12Headers` — Schema-free X12 envelope peek
+#### 1. `peekX12Headers` — Schema-free X12 header peek
 
-No schema is needed. Parses the X12 envelope hierarchy to the requested depth. Useful for routing, filtering, and schema selection.
+No schema is needed. Parses the X12 ISA segment and optionally the first GS segment. Useful for routing, filtering, and schema selection.
 
 ```ballerina
-# Parses X12 envelope headers without requiring a schema.
+# Parses X12 interchange headers (ISA and optionally GS) without requiring a schema.
 #
 # + ediText - raw X12 EDI text
-# + depth - how deep to parse (default: INTERCHANGE)
-# + return - parsed envelope or error
-public isolated function peekX12Headers(string ediText, X12PeekDepth depth = INTERCHANGE)
-    returns X12Interchange|Error;
+# + return - parsed headers or error
+public isolated function peekX12Headers(string ediText) returns X12Headers|Error;
 ```
 
-Leverages the fixed-width nature of the X12 ISA segment (106 characters) to detect delimiters and parse the envelope.
+Leverages the fixed-width nature of the X12 ISA segment (106 characters) to detect delimiters and parse the headers.
 
-#### 2. `peekEdifactHeaders` — Schema-free EDIFACT envelope peek
+#### 2. `peekEdifactHeaders` — Schema-free EDIFACT header peek
 
-No schema is needed. Parses the EDIFACT envelope hierarchy to the requested depth.
+No schema is needed. Parses the EDIFACT UNB segment and optionally the first UNH segment.
 
 ```ballerina
-# Parses EDIFACT envelope headers without requiring a schema.
+# Parses EDIFACT interchange headers (UNB and optionally UNH) without requiring a schema.
 #
 # + ediText - raw EDIFACT EDI text
-# + depth - how deep to parse (default: INTERCHANGE)
-# + return - parsed envelope or error
-public isolated function peekEdifactHeaders(string ediText, EdifactPeekDepth depth = INTERCHANGE)
-    returns EdifactInterchange|Error;
+# + return - parsed headers or error
+public isolated function peekEdifactHeaders(string ediText) returns EdifactHeaders|Error;
 ```
 
-Handles the optional UNA service string advice to detect delimiters, then parses UNB and deeper levels as requested.
+Handles the optional UNA service string advice to detect delimiters, then parses UNB and optionally UNH.
 
 #### 3. `headersFromEdiString` — Schema-driven header-only parse
 
@@ -391,8 +271,8 @@ Rejected for now. Streaming adds significant complexity (iterators, resource cle
 ### C. Return `X12Headers|EdifactHeaders` from a single `peekHeaders` function
 Rejected. A union return forces callers to type-switch. Separate `peekX12Headers`/`peekEdifactHeaders` functions are explicit and idiomatic in Ballerina.
 
-### D. Always parse peek to transaction depth without enum
-Considered. Simplifies the API by removing the depth enum, but loses flexibility for use cases where only interchange-level metadata is needed (e.g., routing on sender/receiver alone without paying the cost of parsing all groups and transactions).
+### D. Depth-based peek with enum parameter
+Considered. A depth enum (`INTERCHANGE`, `GROUP`, `TRANSACTION`) would allow peek APIs to parse deeper into the envelope hierarchy (groups, transactions/messages). Deferred to future work to keep the initial API surface simple; the header-only peek covers the primary routing and filtering use cases.
 
 ## Risks and Assumptions
 
@@ -408,14 +288,12 @@ Considered. Simplifies the API by removing the depth enum, but loses flexibility
 ## Testing
 
 - `peekX12Headers`:
-    - `INTERCHANGE` depth: valid ISA/IEA with raw groups as `rawContent`.
-    - `GROUP` depth: ISA/IEA with parsed GS/GE groups, raw transactions as `rawContent`.
-    - `TRANSACTION` depth: full envelope with parsed ST/SE, body as `rawSegments`.
+    - Valid ISA with GS: returns both `isa` and `gs` fields populated.
+    - Valid ISA without GS: returns `isa` populated, `gs` is nil.
     - Non-X12 input (error), truncated ISA (error).
 - `peekEdifactHeaders`:
-    - `INTERCHANGE` depth: UNB/UNZ with raw groups as `rawContent`.
-    - `GROUP` depth: UNB/UNZ with parsed UNG/UNE groups, raw messages as `rawContent`.
-    - `MESSAGE` depth: full envelope with parsed UNH/UNT, body as `rawSegments`.
+    - Valid UNB with UNH: returns both `unb` and `unh` fields populated.
+    - Valid UNB without UNH: returns `unb` populated, `unh` is nil.
     - With UNA, without UNA (default delimiters), missing UNB (error).
 - `headersFromEdiString`: schema with `headerSegments` (X12 and EDIFACT), old schema without `headerSegments` (expect error).
 - `envelopeFromEdiString`:
