@@ -13,24 +13,25 @@
 
 ## Summary
 
-Introduce a tiered EDI parsing API to `ballerina/edi` that allows consumers to read EDI documents at varying levels of depth — from schema-free envelope peeking to full deep parsing — without requiring multiple passes over the document. This proposal also adds first-class support for header and trailer segments in the EDI schema and updates `edi-tools` to auto-populate these fields during X12 and EDIFACT schema generation.
+Introduce a tiered EDI parsing API to `ballerina/edi` that allows consumers to read EDI documents at varying levels of depth — from schema-free envelope peeking to full hierarchical interchange parsing — without requiring multiple passes over the document. This proposal defines five API functions spanning schema-free and schema-driven usage, adds a structured `envelope` field to the EDI schema that captures the interchange/group/transaction hierarchy, and updates `edi-tools` to auto-populate this field during X12 and EDIFACT schema generation.
 
 ## Goals
 
-- Provide a schema-free API for extracting X12 and EDIFACT envelope headers without loading a schema.
-- Provide a schema-driven API that stops parsing immediately after the header segments.
-- Provide a schema-driven one-pass API that parses the envelope (header + trailer) and returns the body as raw segments.
-- Add `headerSegments` and `trailerSegments` fields to `EdiSchema` so envelope segments are handled explicitly rather than silently ignored.
-- Define standard Ballerina types for X12 (`ISA`, `GS`) and EDIFACT (`UNB`, `UNH`) envelope elements, reusable across generated libraries.
-- Update `edi-tools` to auto-populate `headerSegments` and `trailerSegments` during X12 XSD and EDIFACT schema conversion, and generate typed envelope API wrappers in codegen output.
-- Maintain full backward compatibility: `fromEdiString` is unchanged; old schemas (without `headerSegments`/`trailerSegments`) continue to work.
-- Provide actionable errors when new API functions are called with old schemas that lack the required fields.
+- Provide schema-free APIs (`peekX12Headers`, `peekEdifactHeaders`) for extracting X12 and EDIFACT interchange-level headers without loading a schema.
+- Provide a schema-driven API (`headersFromEdiString`) that stops parsing immediately after the header segments, for use inside generated libs and custom schemas.
+- Provide a schema-driven fail-safe API (`interchangeFromEdiString`) that parses the full envelope hierarchy into a structured `EdiInterchange` result, tolerating malformed transaction bodies.
+- Retain the existing schema-driven fail-fast API (`fromEdiString`) for transaction body parsing, which skips envelope segments when present in the schema.
+- Define standard Ballerina record types for X12 (`X12Isa`, `X12Gs`, `X12Headers`) and EDIFACT (`EdifactUnb`, `EdifactUnh`, `EdifactHeaders`) envelope elements, reusable across generated libraries.
+- Define hierarchical result types (`EdiInterchange`, `EdiFunctionalGroup`, `EdiTransaction`) that reflect the actual envelope nesting of EDI documents.
+- Add a structured `envelope` field to `EdiSchema` with separate interchange, group (optional), and transaction levels, so envelope segments are handled explicitly rather than silently ignored.
+- Update `edi-tools` to auto-populate the `envelope` field during X12 XSD and EDIFACT schema conversion, and generate typed interchange API wrappers in codegen output.
+- Maintain full backward compatibility: `fromEdiString` is unchanged; old schemas (without `envelope`) continue to work.
+- Provide actionable errors when schema-driven API functions are called with old schemas that lack the required `envelope` field.
 
 ## Non-Goals
 
-- Parsing X12 functional groups (`GS`/`GE`) as first-class envelopes (handled via `headerSegments`).
+- Depth-based envelope peeking (parsing groups, transactions, or messages within peek APIs). The peek APIs return only interchange-level headers; deeper envelope parsing is deferred to future work.
 - Implementing `peekSegments()` for raw segment-level access (deferred to future work).
-- Supporting EDIFACT `UNG`/`UNE` (group-level) envelopes beyond what `headerSegments` already enables.
 - Changing the serialization path (`toEdiString`).
 
 ## Motivation
@@ -41,101 +42,344 @@ The current `ballerina/edi` library exposes a single entry point, `fromEdiString
 - **No schema-less routing.** Message brokers and routing layers need to extract sender, receiver, and message-type information without loading a schema at all. The library provides no facility for this.
 - **Envelope validation is expensive.** Confirming that ISA/IEA or UNT segment counts are correct today requires a full deep parse even though the envelope segments are structurally trivial.
 - **Body forwarding/splitting.** When an application needs to forward or split an EDI interchange, parsing the entire body into typed records and then re-serializing is wasteful. The body can stay as raw strings while the envelope is parsed.
-- **Schema omits envelope segments.** X12 and EDIFACT schemas generated by `edi-tools` currently strip ISA, GS, UNB, and UNH from segments using `ignoreSegments`. There is no structured way to parse or validate them.
-
-The EDI ecosystem (X12, EDIFACT) explicitly separates the interchange envelope from the transaction body. The library should reflect this structure.
+- **Schema omits envelope segments.** X12 and EDIFACT schemas generated by `edi-tools` currently strip ISA, GS, ST, UNB, UNG, and UNH (and their corresponding trailers) from segments using `ignoreSegments`. There is no structured way to parse or validate them.
+- **No fail-safe processing.** A single malformed transaction in a batch of hundreds causes the entire parse to fail. Production systems need the ability to parse what they can and quarantine bad transactions.
+- **No hierarchical structure.** The EDI ecosystem (X12, EDIFACT) explicitly separates the interchange envelope into nested levels — interchange, functional group, and transaction. The library should reflect this structure rather than flattening it.
 
 ## Description
 
-### Schema Changes
+### Standard Envelope Types
 
-Two new optional fields are added to `EdiSchema`. Both default to `[]` so existing schemas are unaffected:
+#### X12 Records
 
 ```ballerina
-public type EdiSchema record {|
-    // ... existing fields ...
+# Interchange Control Header (ISA).
+public type X12Isa record {|
+    string authorizationQualifier;       // ISA01
+    string authorizationInfo;            // ISA02
+    string securityQualifier;            // ISA03
+    string securityInfo;                 // ISA04
+    string senderQualifier;              // ISA05
+    string senderId;                     // ISA06
+    string receiverQualifier;            // ISA07
+    string receiverId;                   // ISA08
+    string date;                         // ISA09
+    string time;                         // ISA10
+    string repetitionSeparator;          // ISA11
+    string versionNumber;                // ISA12
+    string controlNumber;                // ISA13
+    string ackRequested;                 // ISA14
+    string usageIndicator;               // ISA15
+    string componentSeparator;           // ISA16
+|};
 
-    EdiUnitSchema[] headerSegments = [];   // parsed before body segments
-    EdiUnitSchema[] segments = [];         // existing body segments
-    EdiUnitSchema[] trailerSegments = [];  // parsed after body segments
+# Functional Group Header (GS).
+public type X12Gs record {|
+    string functionalCode;               // GS01
+    string senderCode;                   // GS02
+    string receiverCode;                 // GS03
+    string date;                         // GS04
+    string time;                         // GS05
+    string controlNumber;                // GS06
+    string responsibleAgency;            // GS07
+    string versionCode;                  // GS08
+|};
+
+# X12 envelope headers returned by `peekX12Headers`.
+# Contains ISA (always present) and optionally GS (if a functional group follows ISA).
+public type X12Headers record {|
+    X12Isa isa;
+    X12Gs gs?;
 |};
 ```
 
-### Standard Envelope Types
+#### EDIFACT Records
 
-Standard types are added to `ballerina/edi` for X12 and EDIFACT interchange envelopes. These are used by the schema-free peek functions and are reusable across generated libraries.
+```ballerina
+# Interchange Header (UNB).
+public type EdifactUnb record {|
+    string syntaxIdentifier;             // UNB01
+    string syntaxVersionNumber;          // UNB01-2
+    string senderIdentification;         // UNB02
+    string senderQualifier?;             // UNB02-2
+    string recipientIdentification;      // UNB03
+    string recipientQualifier?;          // UNB03-2
+    string date;                         // UNB04-1
+    string time;                         // UNB04-2
+    string controlReference;             // UNB05
+    string applicationReference?;        // UNB07
+|};
 
-**X12 types:**
-- `X12ISA` — Interchange Control Header fields (sender/receiver IDs, qualifiers, date, time, control number, usage indicator)
-- `X12GS` — Functional Group Header fields (functional identifier, sender/receiver, control number, version)
-- `X12Headers` — Combination record containing `isa` and optional `gs`
+# Message Header (UNH).
+public type EdifactUnh record {|
+    string messageReferenceNumber;       // UNH01
+    string messageType;                  // UNH02-1
+    string messageVersionNumber;         // UNH02-2
+    string messageReleaseNumber;         // UNH02-3
+    string controllingAgency;            // UNH02-4
+|};
 
-**EDIFACT types:**
-- `EdifactUNB` — Interchange Header fields (syntax identifier, sender, recipient, date/time, control reference)
-- `EdifactUNH` — Message Header fields (message reference, message type/version/release/agency)
-- `EdifactHeaders` — Combination record containing `unb` and optional `unh`
+# EDIFACT envelope headers returned by `peekEdifactHeaders`.
+# Contains UNB (always present) and optionally UNH (if a message header follows).
+public type EdifactHeaders record {|
+    EdifactUnb unb;
+    EdifactUnh unh?;
+|};
+```
 
-**Result type:**
-- `EdiEnvelope` — Contains parsed `headers` (json), raw `body` (string[]), and parsed `trailers` (json)
+### Schema Changes
+
+A structured `envelope` field is added to `EdiSchema` that captures the interchange/group/transaction hierarchy. The `group` level is optional — EDIFACT schemas that omit UNG/UNE leave it unset.
+
+```ballerina
+# Defines one level of the envelope hierarchy (e.g., interchange, group, or transaction).
+public type EdiEnvelopeLevel record {|
+    EdiUnitSchema[] header;
+    EdiUnitSchema[] trailer;
+|};
+
+# Structured envelope schema with separate levels for interchange, group, and transaction.
+public type EdiEnvelopeSchema record {|
+    EdiEnvelopeLevel interchange;
+    EdiEnvelopeLevel group?;             // optional — omit for EDIFACT without UNG/UNE
+    EdiEnvelopeLevel 'transaction;
+|};
+
+public type EdiSchema record {|
+    // ... existing fields ...
+
+    EdiEnvelopeSchema? envelope = ();    // hierarchical envelope definition
+    EdiUnitSchema[] segments = [];       // body segments (unchanged)
+|};
+```
+
+Example JSON schema with `envelope` (X12):
+
+```json
+{
+  "envelope": {
+    "interchange": {
+      "header": [{ "code": "ISA", "tag": "InterchangeControlHeader", "..." : "..." }],
+      "trailer": [{ "code": "IEA", "tag": "InterchangeControlTrailer", "..." : "..." }]
+    },
+    "group": {
+      "header": [{ "code": "GS", "tag": "FunctionalGroupHeader", "..." : "..." }],
+      "trailer": [{ "code": "GE", "tag": "FunctionalGroupTrailer", "..." : "..." }]
+    },
+    "transaction": {
+      "header": [{ "code": "ST", "tag": "TransactionSetHeader", "..." : "..." }],
+      "trailer": [{ "code": "SE", "tag": "TransactionSetTrailer", "..." : "..." }]
+    }
+  },
+  "segments": ["..."]
+}
+```
+
+Example JSON schema with `envelope` (EDIFACT without groups):
+
+```json
+{
+  "envelope": {
+    "interchange": {
+      "header": [{ "code": "UNB", "tag": "InterchangeHeader", "..." : "..." }],
+      "trailer": [{ "code": "UNZ", "tag": "InterchangeTrailer", "..." : "..." }]
+    },
+    "transaction": {
+      "header": [{ "code": "UNH", "tag": "MessageHeader", "..." : "..." }],
+      "trailer": [{ "code": "UNT", "tag": "MessageTrailer", "..." : "..." }]
+    }
+  },
+  "segments": ["..."]
+}
+```
+
+### Hierarchical Envelope Result Types
+
+The general-purpose module defines result types that handle both with-group and without-group scenarios using optional fields:
+
+```ballerina
+# A parsed EDI interchange containing the full envelope hierarchy.
+# Exactly one of `groups` or `transactions` is set, depending on whether the
+# schema defines a group level (e.g., GS/GE for X12).
+public type EdiInterchange record {|
+    record {} interchangeHeader;
+    EdiFunctionalGroup[] groups?;        // set when envelope.group exists
+    EdiTransaction[] transactions?;      // set when envelope.group is absent
+    record {} interchangeTrailer;
+|};
+
+# A functional group within an interchange (e.g., GS...GE for X12).
+public type EdiFunctionalGroup record {|
+    record {} groupHeader;
+    EdiTransaction[] transactions;
+    record {} groupTrailer;
+|};
+
+# A single transaction/message within the envelope.
+# The body is parsed into a record on success, or preserved as a raw string on failure (fail-safe).
+public type EdiTransaction record {|
+    record {} transactionHeader;
+    record {}|string body;
+    record {} transactionTrailer;
+|};
+```
+
+Generated libraries produce **specific** types with no optionals. For X12 (groups exist):
+
+```ballerina
+public type PurchaseOrderInterchange record {|
+    InterchangeControlHeader interchangeHeader;
+    PurchaseOrderFunctionalGroup[] groups;
+    InterchangeControlTrailer interchangeTrailer;
+|};
+
+public type PurchaseOrderFunctionalGroup record {|
+    FunctionalGroupHeader groupHeader;
+    PurchaseOrderTransaction[] transactions;
+    FunctionalGroupTrailer groupTrailer;
+|};
+
+public type PurchaseOrderTransaction record {|
+    TransactionSetHeader transactionHeader;
+    PurchaseOrder|string body;
+    TransactionSetTrailer transactionTrailer;
+|};
+```
+
+For EDIFACT without groups:
+
+```ballerina
+public type OrdersInterchange record {|
+    InterchangeHeader interchangeHeader;
+    OrdersTransaction[] transactions;
+    InterchangeTrailer interchangeTrailer;
+|};
+
+public type OrdersTransaction record {|
+    MessageHeader transactionHeader;
+    Orders|string body;
+    MessageTrailer transactionTrailer;
+|};
+```
 
 ### New Public API Functions
 
-The API introduces four tiers of parsing depth:
+The API introduces five functions spanning schema-free and schema-driven usage:
 
-#### Tier 0: Schema-free peek
+#### 1. `peekX12Headers` — Schema-free X12 header peek
 
-No schema is needed. Useful for routing and schema selection before a schema is loaded.
+No schema is needed. Parses the X12 ISA segment and optionally the first GS segment. Useful for routing, filtering, and schema selection.
 
 ```ballerina
+# Parses X12 interchange headers (ISA and optionally GS) without requiring a schema.
+#
+# + ediText - raw X12 EDI text
+# + return - parsed headers or error
 public isolated function peekX12Headers(string ediText) returns X12Headers|Error;
+```
 
+Leverages the fixed-width nature of the X12 ISA segment (106 characters) to detect delimiters and parse the headers.
+
+#### 2. `peekEdifactHeaders` — Schema-free EDIFACT header peek
+
+No schema is needed. Parses the EDIFACT UNB segment and optionally the first UNH segment.
+
+```ballerina
+# Parses EDIFACT interchange headers (UNB and optionally UNH) without requiring a schema.
+#
+# + ediText - raw EDIFACT EDI text
+# + return - parsed headers or error
 public isolated function peekEdifactHeaders(string ediText) returns EdifactHeaders|Error;
 ```
 
-`peekX12Headers` leverages the fixed-width nature of the X12 ISA segment to parse the interchange header and optionally the GS functional group header. `peekEdifactHeaders` handles the optional UNA service string advice to detect delimiters, then parses UNB and optionally UNH.
+Handles the optional UNA service string advice to detect delimiters, then parses UNB and optionally UNH.
 
-#### Tier 1: Schema-driven header-only parse
+#### 3. `headersFromEdiString` — Schema-driven header-only parse
 
-Reads only the segments declared in `schema.headerSegments` and stops. Does not scan the rest of the document.
+Reads only the envelope header segments (across all levels: interchange, group if present, and transaction) and stops. Does not scan the rest of the document. Intended for use inside generated libraries and custom schemas where only the header fields are needed.
 
 ```ballerina
+# Parses only the envelope header segments defined in the schema and stops.
+#
+# + ediText - raw EDI text
+# + schema - EDI schema (must have non-nil envelope)
+# + return - parsed header fields as JSON or error
 public isolated function headersFromEdiString(string ediText, EdiSchema schema) returns json|Error;
 ```
 
-Returns an error if `schema.headerSegments` is empty (old schema guard).
+Returns an error if `schema.envelope` is nil (old schema guard).
 
-#### Tier 2: Envelope parse (one full pass)
+#### 4. `interchangeFromEdiString` — Schema-driven fail-safe interchange parse
 
-Parses `headerSegments`, collects body segment strings (unparsed), then parses `trailerSegments`.
+Parses the full envelope hierarchy into an `EdiInterchange` — interchange header/trailer, functional groups (if `envelope.group` is defined), and transactions within each group. Envelope segments (headers and trailers) are parsed fail-fast — malformed envelope segments produce an error. **Fail-safe behavior applies only to the transaction body**: malformed transaction body segments are preserved as raw strings rather than causing the entire parse to fail.
+
+When `envelope.group` is absent (e.g., EDIFACT without UNG/UNE), transactions are placed directly under the interchange in the `transactions` field. When `envelope.group` is present (e.g., X12 with GS/GE), transactions are nested inside `EdiFunctionalGroup` entries in the `groups` field.
 
 ```ballerina
-public isolated function envelopeFromEdiString(string ediText, EdiSchema schema) returns EdiEnvelope|Error;
+# Parses the full envelope hierarchy and returns an EdiInterchange.
+# Envelope (headers/trailers) is fail-fast; transaction body is fail-safe.
+#
+# + ediText - raw EDI text
+# + schema - EDI schema (must have non-nil envelope)
+# + return - parsed interchange or error
+public isolated function interchangeFromEdiString(string ediText, EdiSchema schema) returns EdiInterchange|Error;
 ```
 
-Returns an error if `schema.headerSegments` or `schema.trailerSegments` is empty (old schema guard).
+Returns an error if `schema.envelope` is nil (old schema guard).
 
-#### Tier 3: Deep parse (existing, unchanged)
+#### 5. `fromEdiString` — Full deep parse (existing, unchanged)
+
+The existing full-parse function, focused on the transaction body. **Fail-fast**: any parsing error causes an immediate error return. When a schema contains an `envelope`, `fromEdiString` skips the envelope segments and parses only the body `segments` — returning the transaction content without the surrounding interchange/group/transaction envelope. For old schemas (where everything is in `segments` and `envelope` is nil), behavior is unchanged.
 
 ```ballerina
+# Parses the transaction body of an EDI document using the provided schema.
+# Skips envelope segments when envelope is defined; parses only body segments.
+# Fail-fast: returns an error on the first malformed segment.
+#
+# + ediText - raw EDI text
+# + schema - EDI schema
+# + return - parsed transaction body as JSON or error
 public isolated function fromEdiString(string ediText, EdiSchema schema) returns json|Error;
 ```
+
+For old schemas (no `envelope`), `fromEdiString` parses all `segments` as before. For new schemas, it skips past the envelope header segments in the input, parses the body `segments`, and stops before the trailer segments. This means users who regenerate their schema get the same transaction body output without needing to change any existing parsing code.
+
+### API Summary
+
+| # | Function | Schema needed? | Error behavior | Primary use case |
+|---|----------|---------------|----------------|------------------|
+| 1 | `peekX12Headers` | No | Tolerant | Routing, filtering, schema selection |
+| 2 | `peekEdifactHeaders` | No | Tolerant | Routing, filtering, schema selection |
+| 3 | `headersFromEdiString` | Yes (`envelope`) | Fail fast | Header-only inspection inside generated libs |
+| 4 | `interchangeFromEdiString` | Yes (`envelope`) | **Fail safe** | Batch splitting, partial recovery, body forwarding |
+| 5 | `fromEdiString` | Yes | **Fail fast** | Transaction body parsing into typed records |
 
 ### Backward Compatibility
 
 | Scenario | Function | Result |
 |---|---|---|
-| Old schema (no `headerSegments`/`trailerSegments`) | `fromEdiString` | Works as before |
+| Old schema (no `envelope`) | `fromEdiString` | Works as before; `envelope` defaults to nil, all `segments` are parsed |
+| New schema (with `envelope`) | `fromEdiString` | Skips envelope segments, parses only body `segments`; transaction body output is identical |
 | Old schema | `headersFromEdiString` | Error with message directing user to regenerate schema |
-| Old schema | `envelopeFromEdiString` | Error with message directing user to regenerate schema |
-| Old schema | `peekX12Headers` / `peekEdifactHeaders` | Works; no schema required |
+| Old schema | `interchangeFromEdiString` | Error with message directing user to regenerate schema |
+| Any input | `peekX12Headers` / `peekEdifactHeaders` | Works; no schema required |
 
 ### Schema Generation (`edi-tools`)
 
-The `edi-tools` module is updated to auto-populate the new schema fields during conversion:
+The `edi-tools` module is updated to auto-populate the `envelope` field during conversion:
 
-- **X12 XSD conversion:** Extracts `ST` (Transaction Set Header) into `headerSegments` and `SE` (Transaction Set Trailer) into `trailerSegments` from the flat segment list.
-- **EDIFACT conversion:** Extracts `UNH` (Message Header) into `headerSegments` and `UNT` (Message Trailer) into `trailerSegments` from the flat segment list.
-- **Code generation:** When a schema contains `headerSegments`, the generated module includes a typed `headersFromEdiString` wrapper. When both `headerSegments` and `trailerSegments` are present, an `envelopeFromEdiString` wrapper is also generated.
+- **X12 XSD conversion:** Builds a structured envelope with three levels:
+  - `interchange`: ISA (Interchange Control Header) / IEA (Interchange Control Trailer)
+  - `group`: GS (Functional Group Header) / GE (Functional Group Trailer)
+  - `transaction`: ST (Transaction Set Header) extracted from the segment list / SE (Transaction Set Trailer) extracted from the segment list
+- **EDIFACT conversion:** Builds a structured envelope with two levels (no group):
+  - `interchange`: UNB (Interchange Header) / UNZ (Interchange Trailer)
+  - `transaction`: UNH (Message Header) extracted from the segment list / UNT (Message Trailer) extracted from the segment list
+  - The `group` level is omitted (no UNG/UNE in current EDIFACT schemas).
+- **Code generation:** When a schema contains an `envelope`, the generated module includes:
+  - A typed `headersFromEdiString` wrapper
+  - A typed `interchangeFromEdiString` wrapper returning a specific interchange type (with `groups` for X12 or `transactions` for EDIFACT, no optionals)
+  - Specific record types for the interchange, functional group (if applicable), and transaction
 
 ## Alternatives
 
@@ -147,6 +391,15 @@ Rejected for now. Streaming adds significant complexity (iterators, resource cle
 
 ### C. Return `X12Headers|EdifactHeaders` from a single `peekHeaders` function
 Rejected. A union return forces callers to type-switch. Separate `peekX12Headers`/`peekEdifactHeaders` functions are explicit and idiomatic in Ballerina.
+
+### D. Depth-based peek with enum parameter
+Considered. A depth enum (`INTERCHANGE`, `GROUP`, `TRANSACTION`) would allow peek APIs to parse deeper into the envelope hierarchy (groups, transactions/messages). Deferred to future work to keep the initial API surface simple; the header-only peek covers the primary routing and filtering use cases.
+
+### E. Flat `headerSegments`/`trailerSegments` instead of structured `envelope`
+Considered. A flat list of header and trailer segments is simpler but loses the envelope hierarchy. The parser cannot distinguish interchange-level headers from group-level or transaction-level headers, making it impossible to produce a hierarchical result like `EdiInterchange` with nested groups and transactions. The structured `envelope` captures the actual nesting of the EDI standard and enables the parser to produce correctly scoped results.
+
+### F. Implicit empty group wrapper when no group level exists
+Rejected. When the schema has no group level (e.g., EDIFACT without UNG/UNE), wrapping transactions in a synthetic `EdiFunctionalGroup` with empty header/trailer is misleading — it implies a group boundary that does not exist in the document. Instead, the `EdiInterchange` type uses optional `groups?`/`transactions?` fields so the structure accurately reflects what is actually present.
 
 ## Risks and Assumptions
 
@@ -161,12 +414,23 @@ Rejected. A union return forces callers to type-switch. Separate `peekX12Headers
 
 ## Testing
 
-- `peekX12Headers`: valid ISA with GS, ISA without GS, non-X12 input (error), truncated ISA (error).
-- `peekEdifactHeaders`: with UNA, without UNA (default delimiters), missing UNB (error).
-- `headersFromEdiString`: schema with `headerSegments` (X12 and EDIFACT), old schema without `headerSegments` (expect error).
-- `envelopeFromEdiString`: schema with both fields (verify headers, body strings, trailers), old schema (expect error).
+- `peekX12Headers`:
+    - Valid ISA with GS: returns both `isa` and `gs` fields populated.
+    - Valid ISA without GS: returns `isa` populated, `gs` is nil.
+    - Non-X12 input (error), truncated ISA (error).
+- `peekEdifactHeaders`:
+    - Valid UNB with UNH: returns both `unb` and `unh` fields populated.
+    - Valid UNB without UNH: returns `unb` populated, `unh` is nil.
+    - With UNA, without UNA (default delimiters), missing UNB (error).
+- `headersFromEdiString`: schema with `envelope` (X12 and EDIFACT), old schema without `envelope` (expect error).
+- `interchangeFromEdiString`:
+    - X12 with multiple GS groups, each containing multiple ST transactions.
+    - EDIFACT without group level — transactions directly under interchange.
+    - Fail-safe behavior: malformed transaction body preserved as string, parse completes.
+    - Old schema without `envelope` (expect error).
 - Backward compatibility: existing `fromEdiString` tests continue to pass unchanged.
-- `edi-tools`: generated schemas include `headerSegments` and `trailerSegments`; generated typed wrappers compile and return correct types.
+- `fromEdiString` with new `envelope` schemas: skips envelope, returns body only — identical output.
+- `edi-tools`: generated schemas include structured `envelope`; generated typed wrappers compile and return correct types (with `groups` for X12, with `transactions` for EDIFACT).
 
 ## References
 
