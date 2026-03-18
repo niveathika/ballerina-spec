@@ -13,7 +13,7 @@
 
 ## Summary
 
-Introduce a tiered EDI parsing API to `ballerina/edi` that allows consumers to read EDI documents at varying levels of depth — from schema-free envelope header extraction to full hierarchical interchange parsing — without requiring multiple passes over the document. This proposal defines seven API functions spanning schema-free and schema-driven usage, adds a structured `envelope` field to the EDI schema that captures the interchange/group/transaction hierarchy, and updates `edi-tools` to auto-populate this field during X12 and EDIFACT schema generation.
+Introduce a tiered EDI parsing API to `ballerina/edi` that allows consumers to read EDI documents at varying levels of depth — from schema-free envelope header extraction to full hierarchical interchange parsing — without requiring multiple passes over the document. This proposal defines nine API functions spanning schema-free and schema-driven usage (each with string and file variants), adds a structured `envelope` field to the EDI schema that captures the interchange/group/transaction hierarchy, and updates `edi-tools` to auto-populate this field during X12 and EDIFACT schema generation.
 
 ## Goals
 
@@ -264,7 +264,7 @@ public type OrdersTransaction record {|
 
 ### New Public API Functions
 
-The API introduces seven functions spanning schema-free and schema-driven usage:
+The API introduces nine functions spanning schema-free and schema-driven usage:
 
 #### 1. `x12HeadersFromEdiString` — Schema-free X12 header extraction from string
 
@@ -318,7 +318,7 @@ No schema is needed. Reads the file and parses the EDIFACT UNB segment and optio
 public isolated function edifactHeadersFromFile(string filePath) returns EdifactHeaders|Error;
 ```
 
-#### 5. `headersFromEdiString` — Schema-driven header-only parse
+#### 5. `headersFromEdiString` — Schema-driven header-only parse from string
 
 Reads only the envelope header segments (across all levels: interchange, group if present, and transaction) and stops. Does not scan the rest of the document. Intended for use inside generated libraries and custom schemas where only the header fields are needed.
 
@@ -333,7 +333,20 @@ public isolated function headersFromEdiString(string ediText, EdiSchema schema) 
 
 Returns an error if `schema.envelope` is nil (old schema guard).
 
-#### 6. `interchangeFromEdiString` — Schema-driven fail-safe interchange parse
+#### 6. `headersFromEdiFile` — Schema-driven header-only parse from file
+
+Reads the file and parses only the envelope header segments.
+
+```ballerina
+# Parses only the envelope header segments from an EDI file.
+#
+# + filePath - path to the EDI file
+# + schema - EDI schema (must have non-nil envelope)
+# + return - parsed header fields as JSON or error
+public isolated function headersFromEdiFile(string filePath, EdiSchema schema) returns json|Error;
+```
+
+#### 7. `interchangeFromEdiString` — Schema-driven fail-safe interchange parse from string
 
 Parses the full envelope hierarchy into an `EdiInterchange` — interchange header/trailer, functional groups (if `envelope.group` is defined), and transactions within each group. Envelope segments (headers and trailers) are parsed fail-fast — malformed envelope segments produce an error. **Fail-safe behavior applies only to the transaction body**: malformed transaction body segments are preserved as raw strings rather than causing the entire parse to fail.
 
@@ -351,7 +364,20 @@ public isolated function interchangeFromEdiString(string ediText, EdiSchema sche
 
 Returns an error if `schema.envelope` is nil (old schema guard).
 
-#### 7. `fromEdiString` — Full deep parse (existing, unchanged)
+#### 8. `interchangeFromEdiFile` — Schema-driven fail-safe interchange parse from file
+
+Reads the file and parses the full envelope hierarchy.
+
+```ballerina
+# Parses the full envelope hierarchy from an EDI file.
+#
+# + filePath - path to the EDI file
+# + schema - EDI schema (must have non-nil envelope)
+# + return - parsed interchange or error
+public isolated function interchangeFromEdiFile(string filePath, EdiSchema schema) returns EdiInterchange|Error;
+```
+
+#### 9. `fromEdiString` — Full deep parse (existing, unchanged)
 
 The existing full-parse function, focused on the transaction body. **Fail-fast**: any parsing error causes an immediate error return. When a schema contains an `envelope`, `fromEdiString` skips the envelope segments and parses only the body `segments` — returning the transaction content without the surrounding interchange/group/transaction envelope. For old schemas (where everything is in `segments` and `envelope` is nil), behavior is unchanged.
 
@@ -377,8 +403,10 @@ For old schemas (no `envelope`), `fromEdiString` parses all `segments` as before
 | 3 | `edifactHeadersFromEdiString` | No | Tolerant | Routing, filtering, schema selection |
 | 4 | `edifactHeadersFromFile` | No | Tolerant | Routing, filtering, schema selection |
 | 5 | `headersFromEdiString` | Yes (`envelope`) | Fail fast | Header-only inspection inside generated libs |
-| 6 | `interchangeFromEdiString` | Yes (`envelope`) | **Fail safe** | Batch splitting, partial recovery, body forwarding |
-| 7 | `fromEdiString` | Yes | **Fail fast** | Transaction body parsing into typed records |
+| 6 | `headersFromEdiFile` | Yes (`envelope`) | Fail fast | Header-only inspection from file |
+| 7 | `interchangeFromEdiString` | Yes (`envelope`) | **Fail safe** | Batch splitting, partial recovery, body forwarding |
+| 8 | `interchangeFromEdiFile` | Yes (`envelope`) | **Fail safe** | Batch splitting, partial recovery from file |
+| 9 | `fromEdiString` | Yes | **Fail fast** | Transaction body parsing into typed records |
 
 ### Backward Compatibility
 
@@ -451,11 +479,13 @@ Rejected. When the schema has no group level (e.g., EDIFACT without UNG/UNE), wr
     - With UNA, without UNA (default delimiters), missing UNB (error).
 - `edifactHeadersFromFile`: reads from file, valid file returns headers, missing file returns error.
 - `headersFromEdiString`: schema with `envelope` (X12 and EDIFACT), old schema without `envelope` (expect error).
+- `headersFromEdiFile`: reads from file, valid file returns headers, missing file returns error.
 - `interchangeFromEdiString`:
     - X12 with multiple GS groups, each containing multiple ST transactions.
     - EDIFACT without group level — transactions directly under interchange.
     - Fail-safe behavior: malformed transaction body preserved as string, parse completes.
     - Old schema without `envelope` (expect error).
+- `interchangeFromEdiFile`: reads from file, valid file returns interchange, missing file returns error.
 - Backward compatibility: existing `fromEdiString` tests continue to pass unchanged.
 - `fromEdiString` with new `envelope` schemas: skips envelope, returns body only — identical output.
 - `edi-tools`: generated schemas include structured `envelope`; generated typed wrappers compile and return correct types (with `groups` for X12, with `transactions` for EDIFACT).
