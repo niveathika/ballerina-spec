@@ -478,9 +478,6 @@ Rejected. When the schema has no group level (e.g., EDIFACT without UNG/UNE), wr
 ### G. Preserve malformed transaction body as raw string (`json|string`)
 Rejected. An earlier design preserved malformed transaction bodies as the raw segment text (`json|string`). This was replaced with `json|error` because the raw string provides no diagnostic information about *why* the parse failed. With `json|error`, callers can inspect `error.message()` to understand the failure, log it, or route the transaction to a dead-letter queue with context. The raw segment text is still available via the original EDI input if needed.
 
-### H. Use inline record types for EDIFACT composites
-Rejected. An earlier design used inline anonymous record types within `EdifactUNB` and `EdifactUNH` (e.g., `record {| string syntaxId; string syntaxVersion; |} syntaxIdentifier`). These were extracted into named types (`EdifactSyntaxIdentifier`, `EdifactInterchangeParty`, `EdifactDateTime`, `EdifactMessageIdentifier`) for reusability, documentation clarity, and to allow generated libraries and user code to reference the composite types independently.
-
 ## Risks and Assumptions
 
 - `x12HeadersFromEdiString` relies on the ISA segment being fixed-width (106 characters). This is defined by the X12 standard and is not configurable, but non-conforming implementations would produce incorrect results.
