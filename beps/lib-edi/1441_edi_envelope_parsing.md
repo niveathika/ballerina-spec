@@ -20,6 +20,7 @@ Introduce a tiered EDI parsing API to `ballerina/edi` that allows consumers to r
 - Provide schema-free APIs (`x12HeadersFromEdiString`, `x12HeadersFromEdiFile`, `edifactHeadersFromEdiString`, `edifactHeadersFromEdiFile`) for extracting X12 and EDIFACT interchange-level headers without loading a schema.
 - Provide a schema-driven API (`headersFromEdiString`, `headersFromEdiFile`) that stops parsing immediately after the header segments, for use inside generated libs and custom schemas.
 - Provide a schema-driven fail-safe API (`interchangeFromEdiString`) that parses the full envelope hierarchy into a structured `EdiInterchange` result, tolerating malformed transaction bodies.
+- Provide a symmetric schema-driven write API (`interchangeToEdiString`) that serialises an `EdiInterchange` back into EDI text, so callers do not have to hand-build envelope segments.
 - Retain the existing schema-driven fail-fast API (`fromEdiString`) for transaction body parsing, which skips envelope segments when present in the schema.
 - Define standard Ballerina record types for X12 (`X12ISA`, `X12GS`, `X12Headers`) and EDIFACT (`EdifactUNB`, `EdifactUNH`, `EdifactHeaders`) envelope elements, reusable across generated libraries.
 - Define hierarchical result types (`EdiInterchange`, `EdiFunctionalGroup`, `EdiTransaction`) that reflect the actual envelope nesting of EDI documents.
@@ -33,7 +34,7 @@ Introduce a tiered EDI parsing API to `ballerina/edi` that allows consumers to r
 
 - Depth-based envelope parsing (parsing groups, transactions, or messages within the schema-free header APIs). The schema-free APIs return only interchange-level headers; deeper envelope parsing is deferred to future work.
 - Implementing `peekSegments()` for raw segment-level access (deferred to future work).
-- Changing the serialization path (`toEdiString`).
+- Changing the existing `toEdiString` body-only serialization path. The new `interchangeToEdiString` is added as a separate function alongside it; `toEdiString`'s signature and behaviour are unchanged.
 
 ## Motivation
 
@@ -400,6 +401,26 @@ public isolated function fromEdiString(string ediText, EdiSchema schema) returns
 
 For old schemas (no `envelope`), `fromEdiString` parses all `segments` as before. For new schemas, it skips past the envelope header segments in the input, parses the body `segments`, and stops before the trailer segments. This means users who regenerate their schema get the same transaction body output without needing to change any existing parsing code.
 
+#### 9. `interchangeToEdiString` — Schema-driven envelope-aware write
+
+Inverse of `interchangeFromEdiString`. Serialises a fully populated `EdiInterchange` into EDI text using the schema's `envelope` definition — the interchange / group? / transaction headers and trailers are written from the corresponding `EdiInterchange` fields, and each transaction's body is written using `schema.segments` (the same fragment `fromEdiString` parses against).
+
+The existing `toEdiString` is body-only and unchanged: when a schema declares an `envelope`, `toEdiString` writes only `schema.segments`, not the surrounding envelope. `interchangeToEdiString` is the API to use when the caller wants envelope segments emitted alongside the body without having to hand-build them.
+
+```ballerina
+# Serialises an EdiInterchange into EDI text using the schema's envelope
+# definition. Inverse of interchangeFromEdiString.
+#
+# + msg - The interchange to serialise
+# + schema - EDI schema with a non-nil envelope
+# + return - EDI text, or Error
+public isolated function interchangeToEdiString(EdiInterchange msg, EdiSchema schema) returns string|Error;
+```
+
+Returns an error if `schema.envelope` is nil (old schema guard); if `EdiInterchange.groups` is unset for an X12-style schema (or `transactions` is unset for an EDIFACT-style schema); or if any transaction's `body` field is an `error` (malformed bodies cannot be serialised — callers must filter or replace them first).
+
+A parse / serialise round-trip is structurally symmetric: `interchangeFromEdiString(interchangeToEdiString(ix, schema), schema)` yields an interchange with the same hierarchy and per-transaction body shape as the input.
+
 ### API Summary
 
 | # | Function | Schema needed? | Error behavior | Primary use case |
@@ -412,6 +433,7 @@ For old schemas (no `envelope`), `fromEdiString` parses all `segments` as before
 | 6 | `headersFromEdiFile` | Yes (`envelope`) | Fail fast | Header-only inspection from file |
 | 7 | `interchangeFromEdiString` | Yes (`envelope`) | **Fail safe** (body only) | Batch splitting, partial recovery, body forwarding |
 | 8 | `fromEdiString` | Yes | **Fail fast** | Transaction body parsing into typed records |
+| 9 | `interchangeToEdiString` | Yes (`envelope`) | Fail fast | Envelope-aware serialise; round-trip with `interchangeFromEdiString` |
 
 ### Performance Characteristics
 
@@ -436,6 +458,8 @@ For the string-based `headersFromEdiString`, the number of segments split is cal
 | New schema (with `envelope`) | `fromEdiString` | Skips envelope segments, parses only body `segments`; transaction body output is identical |
 | Old schema | `headersFromEdiString` | Error with message directing user to regenerate schema |
 | Old schema | `interchangeFromEdiString` | Error with message directing user to regenerate schema |
+| Old schema | `interchangeToEdiString` | Error with message directing user to regenerate schema |
+| New schema | `toEdiString` | Body only — envelope segments are not written. Use `interchangeToEdiString` to emit envelope and body together. |
 | Any input | `x12HeadersFromEdiString` / `x12HeadersFromEdiFile` / `edifactHeadersFromEdiString` / `edifactHeadersFromEdiFile` | Works; no schema required |
 
 ### Schema Generation (`edi-tools`)
@@ -451,9 +475,10 @@ The `edi-tools` module is updated to auto-populate the `envelope` field during c
   - `transaction`: UNH (Message Header) extracted from the segment list / UNT (Message Trailer) extracted from the segment list
   - The `group` level is omitted (no UNG/UNE in current EDIFACT schemas).
 - **Code generation:** When a schema contains an `envelope`, the generated module includes:
-  - A typed `headersFromEdiString` wrapper
+  - A typed `headersFromEdiString` wrapper returning a specific `<Name>Headers` record (no `json` fields visible to the user)
   - A typed `interchangeFromEdiString` wrapper returning a specific interchange type (with `groups` for X12 or `transactions` for EDIFACT, no optionals)
-  - Specific record types for the interchange, functional group (if applicable), and transaction
+  - A typed `interchangeToEdiString` wrapper accepting the same specific interchange type — inverse of `interchangeFromEdiString`
+  - Specific record types for the interchange, functional group (if applicable), transaction, and the envelope segments themselves
 
 ## Alternatives
 
@@ -510,9 +535,14 @@ Rejected. An earlier design preserved malformed transaction bodies as the raw se
     - EDIFACT without group level — transactions directly under interchange.
     - **Fail-safe behavior**: corrupted transaction body results in `body` being an `error` with a descriptive message; envelope and other transactions parse successfully.
     - Old schema without `envelope` (expect error).
+- `interchangeToEdiString`:
+    - X12 round-trip: `interchangeFromEdiString` → `interchangeToEdiString` → `interchangeFromEdiString` yields the same hierarchy and transaction count.
+    - EDIFACT round-trip (no group level).
+    - Refuses to serialise when any transaction's `body` is an `error`.
+    - Old schema without `envelope` (expect error).
 - Backward compatibility: existing `fromEdiString` tests continue to pass unchanged.
 - `fromEdiString` with new `envelope` schemas: skips envelope, returns body only — identical output.
-- `edi-tools`: generated schemas include structured `envelope`; generated typed wrappers compile and return correct types (with `groups` for X12, with `transactions` for EDIFACT).
+- `edi-tools`: generated schemas include structured `envelope`; generated typed wrappers compile and return correct types (with `groups` for X12, with `transactions` for EDIFACT); generated `interchangeToEdiString` wrapper round-trips through the runtime function.
 
 ## References
 
