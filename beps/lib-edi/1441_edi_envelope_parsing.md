@@ -13,7 +13,7 @@
 
 ## Summary
 
-Introduce a tiered EDI parsing API to `ballerina/edi` that allows consumers to read EDI documents at varying levels of depth — from schema-free envelope header extraction to full hierarchical interchange parsing — without requiring multiple passes over the document. This proposal defines eight API functions spanning schema-free and schema-driven usage (each with string and file variants), adds a structured `envelope` field to the EDI schema that captures the interchange/group/transaction hierarchy, and updates `edi-tools` to auto-populate this field during X12 and EDIFACT schema generation.
+Introduce a tiered EDI parsing API to `ballerina/edi` that allows consumers to read EDI documents at varying levels of depth — from schema-free envelope header extraction to full hierarchical interchange parsing — without requiring multiple passes over the document. This proposal defines nine API functions spanning schema-free and schema-driven usage (eight reader functions, most with string and file variants, plus the symmetric writer `interchangeToEdiString`), adds a structured `envelope` field to the EDI schema that captures the interchange/group/transaction hierarchy, and updates `edi-tools` to auto-populate this field during X12 and EDIFACT schema generation.
 
 ## Goals
 
@@ -284,7 +284,7 @@ public type OrdersTransaction record {|
 
 ### New Public API Functions
 
-The API introduces eight functions spanning schema-free and schema-driven usage:
+The API introduces nine functions spanning schema-free and schema-driven usage (the eight readers below, plus the symmetric writer `interchangeToEdiString` in §9):
 
 #### 1. `x12HeadersFromEdiString` — Schema-free X12 header extraction from string
 
