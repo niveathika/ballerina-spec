@@ -191,11 +191,13 @@ The module holds:
 
 - the annotations a model uses to restrict an entity,
 - a compiler plugin that validates them, and
-- the runtime types that generated services share, such as the result envelope and error
-  types.
+- the protocol-neutral runtime types that generated services share: the error body and its
+  error codes.
 
 Keeping the runtime types in a library rather than in generated code means the generated code
-stays thin, and fixes ship as library updates without regeneration.
+stays thin, and fixes ship as library updates without regeneration. The library does not depend
+on any protocol module. Types that are specific to an entity, such as the `<Entity>List`
+envelope, or to a protocol, such as an HTTP status code record, are generated.
 
 A model that uses the annotations imports the module with a prefix:
 
@@ -340,19 +342,48 @@ clients.
 
 #### Errors
 
-Errors fall into protocol-neutral categories, defined as types in `ballerina/dataservice`. Each
-protocol proposal maps them to its own form: an HTTP status code, an entry in the GraphQL
-`errors` array, or an MCP tool result with `isError` set.
+Errors fall into protocol-neutral categories. `ballerina/dataservice` defines one error body
+and an error code per category:
 
-| Category | Raised when | Source |
-|---|---|---|
-| Not found | No record has the given key | `persist:NotFoundError` |
-| Conflict | A record with the key or a unique value already exists | `persist:AlreadyExistsError` |
-| Constraint violation | A write violates a foreign key | `persist:ConstraintViolationError` |
-| Invalid input | The input cannot be bound to the operation's type | The protocol module's binding error |
-| Internal | Any other failure | `persist:Error` and others |
+```ballerina
+public enum ErrorCode {
+    NOT_FOUND,
+    CONFLICT,
+    CONSTRAINT_VIOLATION,
+    INVALID_INPUT,
+    INTERNAL
+}
 
-An internal error's detail is logged and not returned to the caller.
+public type DataserviceError record {|
+    ErrorCode code;
+    string message;
+|};
+```
+
+Each protocol proposal maps the categories to its own form: an HTTP status code, an entry in
+the GraphQL `errors` array, or an MCP tool result with `isError` set.
+
+| Category | `code` | Raised when | Source |
+|---|---|---|---|
+| Not found | `NOT_FOUND` | No record has the given key | `persist:NotFoundError` |
+| Conflict | `CONFLICT` | A record with the key or a unique value already exists | `persist:AlreadyExistsError` |
+| Constraint violation | `CONSTRAINT_VIOLATION` | A write violates a foreign key | `persist:ConstraintViolationError` |
+| Invalid input | `INVALID_INPUT` | The input cannot be bound to the operation's type | The protocol module's binding error |
+| Internal | `INTERNAL` | Any other failure | `persist:Error` and others |
+
+The message is written by the generated service, not taken from the persist error, because the
+SQL datastores put driver text, such as table and constraint names, in their error messages:
+
+| Category | Message |
+|---|---|
+| Not found | `A record with the key '<key>' does not exist for the entity '<Entity>'.` |
+| Conflict | `A record that conflicts with an existing record of the entity '<Entity>' already exists.` |
+| Constraint violation | `The operation violates a constraint of the entity '<Entity>'.` |
+| Internal | `An internal error occurred.` |
+
+A composite key is written as its values joined by `/`, in key order. The persist error's own
+detail for a constraint violation or an internal error is logged and not returned to the
+caller.
 
 A disabled operation is not generated at all, so it does not exist rather than being refused.
 Which protocol error a caller sees when calling one is protocol-specific: a 404 or 405 for HTTP,
