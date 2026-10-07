@@ -159,6 +159,10 @@ not exposed unnoticed.
 
 An empty list is an error. A name that is not an entity in the model is an error.
 
+Persist does not generate a client API for an entity whose fields include an unsupported data
+type. Such an entity cannot be exposed: naming it in `entities` is an error, and when `entities`
+is omitted it is left out with a warning.
+
 ### CLI
 
 No new command is added. Two flags are added to `add` and `pull`.
@@ -402,6 +406,8 @@ a validation error for GraphQL, an unknown tool for MCP.
   own code, as the persist client's generated names already do. The service follows the same
   convention: type names are derived from entity names, such as `<Entity>List`, and other
   module-level names start with `dataservice`.
+- **Client construction:** the service creates the persist client with `new ()`, so
+  `options.withInitParams = true` cannot be used together with `options.dataservice`.
 - **One service per package:** a package has one persist model and at most one data service.
   Persist's `--model` option for several models is not supported together with
   `options.dataservice`.
