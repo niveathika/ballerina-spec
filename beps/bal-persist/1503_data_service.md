@@ -139,7 +139,7 @@ Each value names the Ballerina module that implements the service:
 |---|---|---|
 | `http` | `http:Service` | `http:Listener` |
 | `graphql` | `graphql:Service` | `graphql:Listener` |
-| `mcp` | `mcp:Service` | `mcp:Listener` |
+| `mcp` | `mcp:StreamableHttpService` | `mcp:StreamableHttpListener` |
 
 `http` is used rather than `rest` because it names the protocol and the module, where `rest`
 names a design style. GraphQL and MCP are also carried over HTTP; the value selects the service
@@ -302,7 +302,9 @@ These are reserved for later proposals and are not used for anything else:
 
 #### Types
 
-The service reuses the types persist already generates:
+The shape is defined in terms of the types persist already generates. The HTTP and MCP services
+use them directly; the GraphQL service generates equivalent input and output types, because
+`ballerina/graphql` does not accept the persist types as they are (see the GraphQL proposal).
 
 | Type | Used as |
 |---|---|
@@ -495,9 +497,9 @@ listener configuration.
 
 | Proposal | Scope |
 |---|---|
-| 2. HTTP | `http:Service`: collection and key paths, methods, status codes, request and response bodies |
-| 3. GraphQL | `graphql:Service`: queries and mutations, input and output types, type mappings for persist's time types and `byte[]`, error mapping |
-| 4. MCP | `mcp:Service`: tool names, input and output schemas, descriptions from doc comments, tool annotations such as read-only hints, error results |
+| 2. [HTTP](NNNN_data_service_http.md) | `http:Service`: collection and key paths, methods, status codes, request and response bodies |
+| 3. [GraphQL](NNNN_data_service_graphql.md) | `graphql:Service`: queries and mutations, input and output types, type mappings for persist's time types and `byte[]`, error mapping |
+| 4. [MCP](NNNN_data_service_mcp.md) | `mcp:StreamableHttpService`: tool names, input and output schemas, descriptions from doc comments, tool annotations such as read-only hints, error results |
 
 ### Roadmap
 
