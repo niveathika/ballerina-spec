@@ -160,17 +160,18 @@ taking `n` rows after the offset gives the same rows in the database and in memo
 
 Each datastore gets the syntax it accepts:
 
-| Datastore | `limit` and offset | Offset only |
-|---|---|---|
-| MySQL | `LIMIT n OFFSET m` | `LIMIT 18446744073709551615 OFFSET m` |
-| PostgreSQL, H2 | `LIMIT n OFFSET m` | `OFFSET m` |
-| MSSQL | `ORDER BY … OFFSET m ROWS FETCH NEXT n ROWS ONLY` | `ORDER BY … OFFSET m ROWS` |
+| Datastore | `limit` and offset | Offset only | Limit only |
+|---|---|---|---|
+| MySQL | `LIMIT n OFFSET m` | `LIMIT 18446744073709551615 OFFSET m` | `LIMIT n` |
+| PostgreSQL, H2 | `LIMIT n OFFSET m` | `OFFSET m` | `LIMIT n` |
+| MSSQL | `ORDER BY … OFFSET m ROWS FETCH NEXT n ROWS ONLY` | `ORDER BY … OFFSET m ROWS` | `ORDER BY … OFFSET 0 ROWS FETCH NEXT n ROWS ONLY` |
 
 MySQL does not accept `OFFSET` without `LIMIT`; the large limit is the form its manual gives
 for "all remaining rows".
 
-MSSQL has no `LIMIT`, and `OFFSET … FETCH` needs an `ORDER BY`. Without `orderByClause`, the
-client adds `ORDER BY (SELECT NULL)`, which keeps the database's order.
+MSSQL has no `LIMIT`, so a limit alone is written as `OFFSET 0 ROWS FETCH NEXT n ROWS ONLY`.
+`OFFSET … FETCH` needs an `ORDER BY`. Without `orderByClause`, the client adds
+`ORDER BY (SELECT NULL)` in each MSSQL form, which keeps the database's order.
 
 The datastore's syntax is a new field of `DataSourceSpecifics`, with a default so existing
 values keep the current behaviour:
@@ -235,7 +236,8 @@ For each of MySQL, PostgreSQL, H2 and MSSQL:
 - A query expression that passes `offsetClause` and is rewritten, checked against the same page
   read with all arguments passed directly.
 - Invalid values: negative, a string, SQL text, more than one interpolation.
-- MSSQL: offset without `order by`, with and without `limit`.
+- MSSQL: offset without `order by`, with and without `limit`, and `limit` alone, with and
+  without `order by`.
 - A client generated without `offsetClause` still runs.
 
 Compiler plugin:
