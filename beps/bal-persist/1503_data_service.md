@@ -724,8 +724,7 @@ The rules are fixed. There is no annotation to change them for a field:
 | A `byte[]` field | no | no | yes |
 | A relation field | no | no | yes, one hop: the whole related record or chosen fields of it; see [Relations](#relations) |
 
-A field that a caller cannot read is never usable in a query option, so
-A field that [field rules](#field-rules) hide is also taken out of every option.
+A field that [field rules](#field-rules) hide from callers is never usable in a query option.
 
 ##### Filter
 
