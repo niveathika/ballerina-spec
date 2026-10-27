@@ -353,7 +353,7 @@ from `ballerina/dataservice`, with the code and message #1503 defines for the ca
 | Internal | `500` | `INTERNAL` | any other error |
 | Unauthenticated | `401` | — | `ballerina/http` auth, before the resource runs ✅ |
 | Missing scope | `403` | — | `ballerina/http` auth, before the resource runs ✅ |
-| Forbidden | `403` | `FORBIDDEN` | get related or a relation in `fields` whose `read` scopes the entity's `read` scopes do not cover, when `auth` is `true` |
+| Forbidden | `403` | `FORBIDDEN` | get related or a relation in `fields` whose `read` scopes the entity's `read` scopes do not cover, when `auth` is `true`; declared only on the resources that can return it, see [Generated resources](#generated-resources) |
 
 The status code records are not specific to an entity, so they are defined in
 `ballerina/dataservice.http`, which keeps `ballerina/dataservice` free of `ballerina/http`:
@@ -552,14 +552,19 @@ service /api on dataserviceListener {
 
   | Operation | Error records |
   |---|---|
-  | Get many | `InvalidInput`, `Forbidden`, `InternalError` |
-  | Get one, get related | `NotFound`, `InvalidInput`, `Forbidden`, `InternalError` |
+  | Get many | `InvalidInput`, `Forbidden` when it can refuse a relation, `InternalError` |
+  | Get one, get related | `NotFound`, `InvalidInput`, `Forbidden` when it can refuse a relation, `InternalError` |
   | Create | `InvalidInput`, `Conflict`, `ConstraintViolation`, `InternalError` |
   | Patch | `NotFound`, `InvalidInput`, `Conflict`, `ConstraintViolation`, `InternalError` |
   | Delete | `NotFound`, `ConstraintViolation`, `InternalError` |
 
   The `401` and `403` responses of `ballerina/http` auth are not among them; see
   [Risks and assumptions](#risks-and-assumptions).
+- **`Forbidden`:** declared only on a resource that can refuse a relation: with `auth = true`,
+  get many and get one of an entity with a relation whose `read` scopes its own do not cover,
+  and get related on such a relation. Other resources never return it, so their OpenAPI
+  definition lists no such `403`. The signatures above declare it, as in a service with
+  `auth = true` where the `read` scopes of `Employee` do not cover those of `Department`.
 - **Library calls:** the generated service imports `ballerina/dataservice.http` as `dsHttp`
   and passes the entity name and key values to its functions, which build the error response,
   log the error detail and build the `Location` header.
