@@ -585,6 +585,8 @@ clients.
 - **Atomic creates:** create one and create many run the insert and the read-back in one
   transaction, so either every record is created or none is. The created records are read back
   with one query, whose filter is `anyOf` their keys.
+- **Order of created records:** create many returns the records in the order of the request, so
+  the record at each position was created from the input at that position.
 - **Batch size:** create many accepts at most `dataserviceMaxPageSize` records. More is invalid
   input.
 - **Patch and delete with `read`:** when the entity allows `read`, patch and delete return the
