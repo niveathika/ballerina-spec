@@ -670,7 +670,10 @@ only `Internal` applies to it.
 | none | Get related and `fields`; foreign key returned and written | Get related and `fields` |
 | `ReadOnly` | Get related and `fields`; foreign key returned, never written | Compile error |
 | `Immutable` | Foreign key set on create, never changed | Compile error |
-| `Internal` | No get related or `fields`; foreign key neither returned nor written | No get related or `fields` from this side |
+| `Internal` | No get related or `fields` from either side; foreign key neither returned nor written | No get related or `fields` from this side |
+
+Internal on the owning side also hides the other side's relation, because reading related
+records through it filters on the hidden foreign key.
 
 The `value` of a relation field is the related entity's key: one value for a single key, or a
 tuple in key order for a composite key. The rule always goes on the relation field, also when the
