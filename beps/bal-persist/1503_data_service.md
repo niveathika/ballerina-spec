@@ -671,9 +671,9 @@ only `Internal` applies to it.
 | `Internal` | No get related or `fields`; foreign key neither returned nor written | No get related or `fields` from this side |
 
 The `value` of a relation field is the related entity's key: one value for a single key, or a
-tuple in key order for a composite key. When the foreign key fields are declared in the model
-with `@sql:Relation`, `ReadOnly` and `Immutable` go on those fields, and only `Internal` goes on
-the relation field.
+tuple in key order for a composite key. The rule always goes on the relation field, also when the
+foreign key fields are declared in the model with `@sql:Relation`, so a relation has its rule in
+one place whether its foreign key is inferred or declared.
 
 ##### Validation
 
@@ -687,7 +687,8 @@ in the persist tool on generation.
 | A `ReadOnly` or `Internal` field that is neither nullable nor generated gives `value` | error | `the field '<field>' of the entity '<Entity>' needs a 'value' in @dataservice:<rule>, because it is neither nullable nor generated.` |
 | `value` matches the field's type | error | `the 'value' in @dataservice:<rule> of the field '<field>' of the entity '<Entity>' is not a '<type>'.` |
 | `ReadOnly` or `Immutable` on a relation field only on the side that holds the foreign key | error | `@dataservice:<rule> cannot be used on the relation field '<field>' of the entity '<Entity>', which has no foreign key.` |
-| A field rule that the entity's actions make meaningless, such as `Immutable` on an entity without `update` | warning | `@dataservice:<rule> on the field '<field>' of the entity '<Entity>' has no effect, because the entity does not allow '<action>'.` |
+| No rule on a foreign key field declared with `@sql:Relation` | error | `@dataservice:<rule> cannot be used on the foreign key field '<field>' of the entity '<Entity>'. Use it on the relation field '<relation>'.` |
+| A field rule that the entity's actions make meaningless: `Immutable` without `update`, `ReadOnly` without `create` and `update`, `Internal` without `read`, `create` and `update` | warning | `@dataservice:<rule> on the field '<field>' of the entity '<Entity>' has no effect, because the entity does not allow '<actions>'.`, where `<actions>` names each of those actions, joined by `' or '` |
 
 ##### Not field rules
 
