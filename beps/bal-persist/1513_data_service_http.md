@@ -539,7 +539,8 @@ service /api on dataserviceListener {
                 |dsHttp:ConstraintViolation|dsHttp:InternalError { ... }
 
     resource function delete employees/[int id]()
-            returns Employee|dsHttp:NotFound|dsHttp:ConstraintViolation|dsHttp:InternalError { ... }
+            returns Employee|dsHttp:NotFound|dsHttp:InvalidInput|dsHttp:ConstraintViolation
+                |dsHttp:InternalError { ... }
 }
 ```
 
@@ -556,7 +557,7 @@ service /api on dataserviceListener {
   | Get one, get related | `NotFound`, `InvalidInput`, `Forbidden` when it can refuse a relation, `InternalError` |
   | Create | `InvalidInput`, `Conflict`, `ConstraintViolation`, `InternalError` |
   | Patch | `NotFound`, `InvalidInput`, `Conflict`, `ConstraintViolation`, `InternalError` |
-  | Delete | `NotFound`, `ConstraintViolation`, `InternalError` |
+  | Delete | `NotFound`, `InvalidInput`, `ConstraintViolation`, `InternalError` |
 
   The `401` and `403` responses of `ballerina/http` auth are not among them; see
   [Risks and assumptions](#risks-and-assumptions).
