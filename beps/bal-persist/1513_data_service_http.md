@@ -596,8 +596,9 @@ public type EmployeeListCreated record {|
   resources of each exposed entity in model order. Within an entity, the order is get many, get
   one, get related (in model order of the relation fields), create, patch and delete.
   `dataservice_types.bal` holds, per entity in model order, the wire types, the `<Entity>List`
-  envelope, the filter and partial types, the status code records and then the functions that
-  convert to and from the wire types.
+  envelope, the filter and partial types, the entity description that
+  `ballerina/dataservice` builds queries from, the status code records and then the functions
+  that convert to and from the wire types.
 - **Doc comments:** every resource and every generated public type has a short doc comment: a
   one-line summary and one-line `+ param`, `+ return` and `+ field` lines. The summary of a
   resource comes from its operation, and the entity's doc comment from the model follows it:
