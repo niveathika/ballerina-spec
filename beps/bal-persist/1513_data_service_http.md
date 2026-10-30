@@ -104,7 +104,7 @@ request for it on its own:
 | Situation | Response |
 |---|---|
 | A method that exists on no resource of the path, for example `PATCH` on a read-only entity | `405 Method Not Allowed` ✅ |
-| A path that matches no resource, for example an entity that is not exposed | `404 Not Found` |
+| A path that matches no resource, for example an entity that is not exposed, or a relation whose direction is `Internal` | `404 Not Found` |
 
 ### Keys
 
@@ -200,6 +200,8 @@ The field rules of #1503 shape the wire types:
   field to the `value` of its annotation, or to `()`.
 - **Other types:** an `Internal` field is also left out of `<Entity>Filter`, `<Entity>Partial`
   and `<Entity>RelatedPartial`, so it cannot be filtered, sorted or selected.
+- **Relation fields:** a direction that is not offered, because its relation field or the
+  foreign key is `Internal`, has no get related resource and no field in `<Entity>Partial`.
 
 ### Query parameters
 
@@ -243,6 +245,10 @@ public type EmployeeFilter record {|
   `400` before the resource runs. ✅
 - **Dates and times** are strings in the filter, as in the body, and are parsed by
   `ballerina/dataservice`; a value that does not parse is answered with `INVALID_INPUT`.
+- **Reserved keys:** keys starting with `$`, such as `$and`, `$or` and `$not`, are reserved for
+  joining conditions in a later proposal, and `<Entity>Filter` holds no field with such a name.
+  Adding them leaves every existing filter valid. ✅ `ballerina/http` binds a recursive filter
+  record with `$or` keys from the query parameter.
 
 #### Sort, page and fields
 
@@ -298,7 +304,8 @@ public type EmployeeRelatedPartialList record {|
 ### Relations
 
 Each relation of an exposed entity gets a resource under the entity's key, and can be named in
-`fields`, when both the entity and the related entity allow `read`, as #1503 defines:
+`fields`, when both the entity and the related entity allow `read` and neither the relation
+field nor the foreign key is `Internal`, as #1503 defines:
 
 ```
 GET /api/employees/4/department
@@ -328,12 +335,13 @@ GET /api/departments/2?fields=name,employees.name
   exist, or when a to-one relation has no related record, with the messages #1503 gives.
 
 ```ballerina
-resource function get employees/[int id]/department(string[]? fields = ())
+resource function get employees/[int id]/department(http:Request request, string[]? fields = ())
         returns Department|DepartmentPartial|dsHttp:NotFound|dsHttp:InvalidInput|dsHttp:Forbidden
             |dsHttp:InternalError { ... }
 
-resource function get departments/[int id]/employees(EmployeeFilter? filter = (),
-        string[]? sort = (), int? size = (), int? offset = (), string[]? fields = ())
+resource function get departments/[int id]/employees(http:Request request,
+        EmployeeFilter? filter = (), string[]? sort = (), int? size = (), int? offset = (),
+        string[]? fields = ())
         returns EmployeeList|EmployeePartialList|dsHttp:NotFound|dsHttp:InvalidInput
             |dsHttp:Forbidden|dsHttp:InternalError { ... }
 ```
@@ -353,7 +361,7 @@ from `ballerina/dataservice`, with the code and message #1503 defines for the ca
 | Internal | `500` | `INTERNAL` | any other error |
 | Unauthenticated | `401` | — | `ballerina/http` auth, before the resource runs ✅ |
 | Missing scope | `403` | — | `ballerina/http` auth, before the resource runs ✅ |
-| Forbidden | `403` | `FORBIDDEN` | get related or a relation in `fields` whose `read` scopes the entity's `read` scopes do not cover, when `auth` is `true`; declared only on the resources that can return it, see [Generated resources](#generated-resources) |
+| Forbidden | `403` | `FORBIDDEN` | get related or a relation in `fields`, when `auth` is `true` and the caller holds no `read` scope of the related entity; declared only on the resources that check it, see [Generated resources](#generated-resources) |
 
 The status code records are not specific to an entity, so they are defined in
 `ballerina/dataservice.http`, which keeps `ballerina/dataservice` free of `ballerina/http`:
@@ -422,9 +430,28 @@ service /api on dataserviceListener {
   user store, a request without credentials was answered with `401`, a user without the scope
   with `403`, and a user with the scope with `200`; the `401` body was `ballerina/http`'s
   default error body.
-- **Get related** and a relation in `fields` require the entity's `read` scopes, and are
-  answered with `403` and `FORBIDDEN` when those do not cover the related entity's, as #1503
-  defines.
+- **Get related** and a relation in `fields` require the entity's `read` scopes through
+  `@http:ResourceConfig`. For a relation whose related entity's `read` scopes the entity's do
+  not cover, as #1503 defines, the resource takes the `http:Request` and calls
+  `dsHttp:authorizeRelation` before reading. It checks the request's credential against the
+  related entity's `read` scopes and returns `Forbidden`, with `FORBIDDEN`, when none matches:
+
+  ```ballerina
+  dsHttp:Forbidden? forbidden = dsHttp:authorizeRelation(request, "Employee", "department",
+          "Department", ["departments:read"]);
+  if forbidden is dsHttp:Forbidden {
+      return forbidden;
+  }
+  ```
+
+  `ballerina/http` validates a credential and checks its scopes before the resource runs, but
+  does not pass the result to the resource, and its `scopes` accept a caller holding any one of
+  them, so they cannot require the scopes of two entities. `dsHttp` therefore creates, once,
+  the listener auth handler of each provider in `dsHttp:authConfig`: `http:ListenerJwtAuthHandler`,
+  `http:ListenerFileUserStoreBasicAuthHandler`, `http:ListenerLdapUserStoreBasicAuthHandler` or
+  `http:ListenerOAuth2Handler`. It tries them in the order of the list, as `ballerina/http`
+  does, and the first that authenticates the credential decides with its `authorize`. A
+  credential that no provider authenticates holds no scope.
 
 For example, to validate JWTs, set in `Config.toml`:
 
@@ -463,11 +490,15 @@ the service and its doc comments, and `ballerina/http` serves it with Swagger UI
   for a service description (RFC 8631).
 - **Swagger UI** loads its scripts and styles from `unpkg.com`, so it needs internet access in
   the browser. The definition itself does not.
-- **Auth:** `ballerina/http` serves the definition, Swagger UI and the `OPTIONS` `Link` header
-  without applying the service's auth. ✅ On Ballerina 2201.14.0, with basic auth configured
-  from `Config.toml`, all three were answered with `200` without credentials. `introspection`
-  therefore defaults to `false` when `options.dataservice.auth` is `true`; an explicit value
-  applies in both cases.
+- **Auth:** with `auth = true`, the definition and Swagger UI are served behind the service's
+  auth providers, so a request without a valid credential is answered with `401`. This needs
+  `ballerina/http` to apply the service's auth to these resources, which it does not yet
+  ([ballerina-library#9432](https://github.com/ballerina-platform/ballerina-library/issues/9432)): on Ballerina 2201.14.0, with basic auth configured from
+  `Config.toml`, the definition, Swagger UI and the `OPTIONS` `Link` header were answered with
+  `200` without credentials. ✅
+- **Swagger UI with a token:** a browser sends no bearer token when Swagger UI loads the
+  definition, so with JWT or OAuth2 the page cannot load it unless the browser adds the token.
+  The definition stays available to clients and tools that send one.
 
 ### Configuration
 
@@ -475,7 +506,7 @@ the service and its doc comments, and `ballerina/http` serves it with Swagger UI
 |---|---|---|
 | Base path | `options.dataservice.basePath` | `/api` |
 | Auth | `options.dataservice.auth` | `false` |
-| Publishing the OpenAPI definition | `options.dataservice.introspection` | `true`, or `false` when `auth` is `true` |
+| Publishing the OpenAPI definition | `options.dataservice.introspection` | `true` |
 | Port | `dataservicePort` in `Config.toml` | `9090` |
 | Page size when `size` is not given | `dataservicePageSize` in `Config.toml` | `100` |
 | Largest page size | `dataserviceMaxPageSize` in `Config.toml` | `1000` |
@@ -515,15 +546,15 @@ keyFile = "/path/to/private.key"
 ```ballerina
 service /api on dataserviceListener {
 
-    resource function get employees(EmployeeFilter? filter = (), string[]? sort = (), int? size = (),
-            int? offset = (), string[]? fields = ())
+    resource function get employees(http:Request request, EmployeeFilter? filter = (),
+            string[]? sort = (), int? size = (), int? offset = (), string[]? fields = ())
             returns EmployeeList|EmployeePartialList|dsHttp:InvalidInput|dsHttp:Forbidden
                 |dsHttp:InternalError {
         // Validates the options and builds the query with ballerina/dataservice, reads one page
         // through the persist client, and returns it with hasMore.
     }
 
-    resource function get employees/[int id](string[]? fields = ())
+    resource function get employees/[int id](http:Request request, string[]? fields = ())
             returns Employee|EmployeePartial|dsHttp:NotFound|dsHttp:InvalidInput|dsHttp:Forbidden
                 |dsHttp:InternalError { ... }
 
@@ -561,14 +592,16 @@ service /api on dataserviceListener {
 
   The `401` and `403` responses of `ballerina/http` auth are not among them; see
   [Risks and assumptions](#risks-and-assumptions).
-- **`Forbidden`:** declared only on a resource that can refuse a relation: with `auth = true`,
+- **`Forbidden`:** declared only on a resource that checks a relation: with `auth = true`,
   get many and get one of an entity with a relation whose `read` scopes its own do not cover,
-  and get related on such a relation. Other resources never return it, so their OpenAPI
-  definition lists no such `403`. The signatures above declare it, as in a service with
-  `auth = true` where the `read` scopes of `Employee` do not cover those of `Department`.
+  and get related on such a relation. Such a resource also takes the `http:Request`, which is
+  not a parameter of the OpenAPI definition. Other resources never return `Forbidden`, so
+  their OpenAPI definition lists no such `403`. The signatures above declare it, as in a
+  service with `auth = true` where the `read` scopes of `Employee` do not cover those of
+  `Department`.
 - **Library calls:** the generated service imports `ballerina/dataservice.http` as `dsHttp`
   and passes the entity name and key values to its functions, which build the error response,
-  log the error detail and build the `Location` header.
+  log the error detail, build the `Location` header and check a relation's scopes.
 - **Location:** each key value is percent-encoded as a path segment, so a key such as `P 1/a`
   gives `/api/assignments/4/P%201%2Fa`. ✅ With the base path `/`, `Location` starts at the
   entity, as in `/employees/1`.
@@ -648,7 +681,8 @@ public type EmployeeListCreated record {|
   the model's descriptions, Swagger UI, and none of them with `introspection = false`.
 - Field rules: per rule, the wire types generated, a `ReadOnly` field ignored on create and
   patch, an `Immutable` field rejected on patch, an `Internal` field rejected and never returned,
-  and `value` set on create.
+  and `value` set on create; a direction hidden by `Internal` answering `404` and absent from
+  `<Entity>Partial` and the OpenAPI definition.
 - A round trip of every `time:*` type and `byte[]` through create and get one, and `400` with
   `INVALID_INPUT` for a value in the wrong format.
 - Query parameters, against H2 and every other SQL datastore available to the test run: every
@@ -665,10 +699,12 @@ public type EmployeeListCreated record {|
   of queries per request, as #1503 gives it.
 - Auth: `auth = false`, with no auth code generated; a credential without a scope (`403`), with
   a default scope, with a scope from `scopes`, and with an empty scope list; no credential
-  (`401`); get related and a relation in `fields` allowed when the entity's `read` scopes cover
-  the related entity's, and answered with `403` and `FORBIDDEN` when they do not; the OpenAPI
-  definition not published by default with `auth = true`, and published when `introspection`
-  is set to `true`.
+  (`401`); get related and a relation in `fields` allowed without a runtime check when the
+  entity's `read` scopes cover the related entity's; when they do not, allowed for a caller
+  holding a `read` scope of the related entity and answered with `403` and `FORBIDDEN`
+  otherwise, with JWT and with basic auth from a file user store; the OpenAPI
+  definition published by default, answered with `401` without credentials when `auth` is
+  `true`, and not published with `introspection = false`.
 - Constraints: a create and a patch that break a constraint, on an entity with and without wire
   types.
 
@@ -680,8 +716,15 @@ public type EmployeeListCreated record {|
   `DataserviceError`. For `filter`, the default body says only
   `error in casting query param : 'filter'`, without naming the field or operator. ✅ An error
   interceptor on the generated service, which is future work, aligns the two shapes.
+- **The definition is public until [ballerina-library#9432](https://github.com/ballerina-platform/ballerina-library/issues/9432) is fixed.** With `auth = true`, a
+  service that must not publish its definition before then sets `introspection = false`.
 - **`401` and `403` are not in the OpenAPI definition.** They come from `ballerina/http` auth
   and are not in the resources' return types, so the definition does not list them.
+- **A second credential check for uncovered relations.** `dsHttp:authorizeRelation` checks the
+  credential again after `ballerina/http` has: a JWT signature is verified again unless the
+  provider's cache is configured, an OAuth2 token is introspected again unless its cache is
+  configured, and an LDAP user is looked up again. Only relations whose `read` scopes are not
+  covered pay this cost.
 - **Lost updates.** As in #1503, there is no `ETag` or `If-Match`, so concurrent `PATCH`
   requests on one record can overwrite each other.
 
@@ -690,11 +733,9 @@ public type EmployeeListCreated record {|
 - [Data service generation for bal persist](https://github.com/ballerina-platform/ballerina-spec/issues/1503)
 - `ballerina/http`
 - `ballerina/openapi`, for `@openapi:ServiceInfo`
+- `ballerina/http` applying the service's auth to the OpenAPI definition and Swagger UI
+  resources ([ballerina-library#9432](https://github.com/ballerina-platform/ballerina-library/issues/9432))
 - `ballerina/dataservice`
-- `ballerinax/persist.sql` classifying a foreign key violation on insert and delete as
-  `persist:ConstraintViolationError`
-  ([ballerina-library#9359](https://github.com/ballerina-platform/ballerina-library/issues/9359)),
-  for `409` with `CONSTRAINT_VIOLATION` on create and delete
 - `ballerina/dataservice.http`: a new library, released separately from `ballerina/dataservice`
 
 ## Future work
