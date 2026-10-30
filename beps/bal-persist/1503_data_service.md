@@ -594,8 +594,8 @@ clients.
   with one query, whose filter is `anyOf` their keys.
 - **Order of created records:** create many returns the records in the order of the request, so
   the record at each position was created from the input at that position.
-- **Batch size:** create many accepts at most `dataserviceMaxPageSize` records. More is invalid
-  input.
+- **Batch size:** create many accepts at most `dataserviceConfig.maxPageSize` records. More is
+  invalid input.
 - **Patch and delete with `read`:** when the entity allows `read`, patch and delete return the
   record, whatever the caller's `read` scopes: a caller allowed to update or delete an entity
   sees the record it changed.
@@ -787,8 +787,8 @@ ISO 8601 date:
   in ascending order, so the order is total. Without `sort`, the records are ordered by key. A
   field named more than once is invalid input.
 - **Nulls:** sort last in ascending order and first in descending order, on every SQL datastore.
-- **Size:** the page size. Without it, `dataservicePageSize` applies. A size above
-  `dataserviceMaxPageSize` is reduced to it, and a size below 1 is invalid input.
+- **Size:** the page size. Without it, `dataserviceConfig.pageSize` applies. A size above
+  `dataserviceConfig.maxPageSize` is reduced to it, and a size below 1 is invalid input.
 - **Offset:** the number of records to skip, `0` by default. An offset below 0, or one for
   which `offset + size` exceeds the largest integer, is invalid input. Because the order is
   total, the same offset returns the same records while the data does not change.
@@ -847,9 +847,9 @@ Persist models these kinds of relation, and each is read with the rules below:
 - **To-one in `fields`:** an empty to-one relation, whose foreign key is null, and one whose
   foreign key points at a missing record, are included as `null`.
 - **To-many in `fields`:** an included to-many relation is a list envelope, `items` and
-  `hasMore`, holding at most `dataservicePageSize` records in key order. `hasMore` tells the
-  caller to page through the rest with get related. Dotted fields, such as `employees.name`,
-  narrow its records.
+  `hasMore`, holding at most `dataserviceConfig.pageSize` records in key order. `hasMore` tells
+  the caller to page through the rest with get related. Dotted fields, such as
+  `employees.name`, narrow its records.
 - **Missing records:** get related answers not found when the record with the given key does
   not exist, or when a to-one relation has no related record. A to-many relation with no
   related records returns an empty list.
@@ -864,7 +864,7 @@ related record ([ballerina-library#9375](https://github.com/ballerina-platform/b
 |---|---|
 | Get related | One get many on the related entity, filtered by the foreign key, plus one get one when the record itself must be checked |
 | A to-one relation in `fields` | One per page: the related records whose key is any of the page's foreign key values |
-| A to-many relation in `fields` | One per record of the page: the related records whose foreign key is the record's key, limited to `dataservicePageSize + 1` rows in key order |
+| A to-many relation in `fields` | One per record of the page: the related records whose foreign key is the record's key, limited to `dataserviceConfig.pageSize + 1` rows in key order |
 
 A composite key matches as `or` over the key tuples, which the filter tree represents even
 though callers cannot write `or` yet.
@@ -912,7 +912,7 @@ persist client is called, with `INVALID_INPUT` unless the row says otherwise:
 | A size below 1 | `The page size must be at least 1.` |
 | An offset below 0 | `The offset must be at least 0.` |
 | An offset for which `offset + size` exceeds the largest integer | `The offset and the page size together exceed the largest integer.` |
-| A create with more than `dataserviceMaxPageSize` records | `A create can hold at most <max> records.` |
+| A create with more than `dataserviceConfig.maxPageSize` records | `A create can hold at most <max> records.` |
 | A `float` key that is `NaN` or infinite | `The key '<key>' of the entity '<Entity>' is not a finite number.` |
 
 #### Errors
@@ -977,10 +977,10 @@ generated only when `options.dataservice.auth` is `true`:
 
 - **Without auth:** with `auth = false`, the default, no auth code is generated and every
   caller can perform every enabled action. A model that sets `scopes` gets a build warning.
-- **Providers:** with `auth = true`, the protocol proposal declares a required configurable
-  value for the authentication providers, such as JWT validation, set in `Config.toml`. It has
-  no default, so the service does not start when `Config.toml` does not set it, and an empty
-  list also stops it at startup.
+- **Providers:** with `auth = true`, the protocol proposal adds a required field to
+  `dataserviceConfig` for the authentication providers, such as JWT validation, set in
+  `Config.toml`. It has no default, so the service does not start when `Config.toml` does not
+  set it, and an empty list also stops it at startup.
 - **Scopes:** with `auth = true`, every operation requires a scope of its action. A caller
   needs any one scope of the list.
 - **Defaults:** an action not listed in `scopes` requires `<resource>:<action>`, where
@@ -1073,33 +1073,53 @@ prerequisite; see [Dependencies](#dependencies).
 Runtime settings follow the database connection settings. Persist generates the database host,
 port, user, password and database name as configurable values in `persist_db_config.bal`, and
 the user sets them in `Config.toml`. The data service does the same: the tool generates
-`dataservice_config.bal` holding the listener and paging settings as configurable values.
+`dataservice_config.bal`, which declares one configurable record, `dataserviceConfig`, holding
+the listener and paging settings.
 
 ```ballerina
-configurable int dataservicePort = 9090;
-configurable int dataservicePageSize = 100;
-configurable int dataserviceMaxPageSize = 1000;
+type DataserviceConfig record {|
+    int port = 9090;
+    int pageSize = 100;
+    int maxPageSize = 1000;
+|};
+
+configurable DataserviceConfig dataserviceConfig = {};
 
 final dataservice:PageConfig dataservicePageConfig =
-        check dataservice:pageConfig(dataservicePageSize, dataserviceMaxPageSize);
+        check dataservice:pageConfig(dataserviceConfig.pageSize, dataserviceConfig.maxPageSize);
 ```
 
-Every protocol uses these names. The values shown are the HTTP defaults; each protocol proposal
-sets its own, because a
-good page size differs by protocol: an agent reading MCP results needs smaller pages than an
-HTTP client.
+The user sets only the fields to change:
 
-The port has a default, unlike the database settings, so the service runs without any
-`Config.toml` entry. The name is not `port` because the database configuration already declares
-`port` in the same module.
+```toml
+[dataserviceConfig]
+port = 8080
+pageSize = 50
+```
+
+- **One table:** the settings are grouped under `[dataserviceConfig]`, so their names need no
+  prefix and do not clash with the database configuration, which already declares `port` in
+  the same module.
+- **Defaults:** every field has a default, so the service runs without any `Config.toml` entry,
+  unlike the database settings. A field left out of the table keeps its default.
+- **Misspelled names:** the record is closed, so an unknown field, such as `pagesize`, stops the
+  program at startup.
+- **Per protocol:** every protocol uses these field names. The values shown are the HTTP
+  defaults; each protocol proposal sets its own, because a good page size differs by protocol:
+  an agent reading MCP results needs smaller pages than an HTTP client. A protocol proposal
+  adds its own fields, such as listener and auth settings.
+
+✅ On Ballerina 2201.14.0, a field left out of `[dataserviceConfig]` kept its default, and an
+unknown field stopped the program with
+`undefined field 'pagesize' provided for closed record`.
 
 The values are checked at startup by the module-level `check` on `dataservice:pageConfig`. The
 service does not start, and the program stops with a message, when a value is out of range:
 
 | Case | Message |
 |---|---|
-| `dataserviceMaxPageSize` below 1 | `The configurable value 'dataserviceMaxPageSize' must be at least 1, found <value>.` |
-| `dataservicePageSize` below 1 or above `dataserviceMaxPageSize` | `The configurable value 'dataservicePageSize' must be between 1 and 'dataserviceMaxPageSize' (<max>), found <value>.` |
+| `maxPageSize` below 1 | `The configurable value 'dataserviceConfig.maxPageSize' must be at least 1, found <value>.` |
+| `pageSize` below 1 or above `maxPageSize` | `The configurable value 'dataserviceConfig.pageSize' must be between 1 and 'dataserviceConfig.maxPageSize' (<max>), found <value>.` |
 
 Other listener settings, such as TLS, are left to the protocol proposals.
 
@@ -1335,6 +1355,15 @@ several services can share one port. This is deferred so that each protocol's re
 specified and settled on its own first. `protocol` is a string that can later also accept an
 array.
 
+### Separate configurable values
+
+For example, `dataservicePort`, `dataservicePageSize` and `dataserviceMaxPageSize`, each a
+configurable value of a simple type. One value, such as the port, can then be overridden with
+`-CdataservicePort=8080` or an environment variable. It is not adopted because the settings
+are scattered as top-level keys, each needing the `dataservice` prefix to avoid the database
+configuration's names, and a protocol's listener and auth settings add more such keys. A
+record groups them under one table and catches a misspelled field.
+
 ## Testing
 
 - **Options schema:** `options.dataservice` with valid and invalid values; required
@@ -1359,15 +1388,16 @@ array.
 - **Query building:** per datastore, quoted identifiers, null ordering, and escaping in
   `contains` and `startsWith`; an empty `anyOf`; `ne` on a nullable field; a field named twice
   in `sort`; the `fields` edge cases; an `offset` too large for the `size`.
-- **Startup:** each out-of-range page size stops the program with its message.
+- **Startup:** each out-of-range page size stops the program with its message; a field left out
+  of `[dataserviceConfig]` keeps its default.
 - **Compilation:** the generated package compiles on MySQL, MSSQL, PostgreSQL and H2, and any
   other datastore is rejected.
 - **Behaviour:** an end-to-end CRUD round trip per protocol against H2, and against MySQL,
   PostgreSQL and MSSQL where a database is available, including each error category; a create
   many with a duplicate key among its records, which creates none of them; a create many above
-  `dataserviceMaxPageSize`; patch and delete on an entity with and without `read`; a to-one
-  relation in `fields` that is empty or points at a missing record; a to-many relation in
-  `fields` with more records than `dataservicePageSize`.
+  `dataserviceConfig.maxPageSize`; patch and delete on an entity with and without `read`; a
+  to-one relation in `fields` that is empty or points at a missing record; a to-many relation
+  in `fields` with more records than `dataserviceConfig.pageSize`.
 - **Backward compatibility:** existing persist tests pass unchanged without
   `options.dataservice`.
 
@@ -1395,6 +1425,12 @@ array.
 - **Name clashes in the default module.** Generated names share the user's namespace, as the
   persist client's already do. A user type with any name in [Types](#types), such as
   `EmployeeList`, fails to compile alongside the generated one.
+- **No single-value overrides.** `-C` command-line arguments and `BAL_CONFIG_VAR_`
+  environment variables take only simple types, so they cannot set one field of
+  `dataserviceConfig`, such as the port. ✅ On Ballerina 2201.14.0,
+  `-CdataserviceConfig.port=8080` was rejected as an unused command line argument. A deployment
+  sets the table in `Config.toml`, in a file named by `BAL_CONFIG_FILES`, or in
+  `BAL_CONFIG_DATA`.
 - **Assumption:** the persist client's resource names, keys and generated types are stable
   enough for the service to build on them.
 
