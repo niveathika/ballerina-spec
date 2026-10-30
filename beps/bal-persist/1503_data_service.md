@@ -509,8 +509,13 @@ It is exposed as a patch.
 
 #### Addressing
 
-- **Collection name:** the resource name the persist client already uses for the entity, for
-  example `employees` for `Employee`.
+- **Collection name:** the entity name with its first letter in lowercase and its last word
+  pluralized as persist pluralizes resource names: `employees` for `Employee`,
+  `projectAssignments` for `ProjectAssignment` and `people` for `Person`. This deviates from the
+  persist client's resource name, which lowercases the whole name, as in `projectassignments`,
+  so that a collection is spelled like the relation fields and the foreign key fields that
+  name it; [ballerina-library#9434](https://github.com/ballerina-platform/ballerina-library/issues/9434) proposes the same rule for persist. The two names
+  are the same for an entity whose name is one word.
 - **Key:** the entity's `readonly` fields, in declaration order. Every persist entity has a key,
   so get one, patch one and delete one exist for every entity whose actions allow them.
 - **Composite keys:** take one value per key field, in that order.
@@ -875,7 +880,7 @@ description.
 
 The entity description holds:
 
-- **Entity:** its name, its persist resource name and the datastore.
+- **Entity:** its name, its collection name, its persist resource name and the datastore.
 - **Fields:** per field, its name, column name and type, whether it is nullable, and whether it
   is a key field or generated.
 - **Relations:** per relation, its field, the target entity, the cardinality, and the foreign
@@ -979,8 +984,8 @@ generated only when `options.dataservice.auth` is `true`:
 - **Scopes:** with `auth = true`, every operation requires a scope of its action. A caller
   needs any one scope of the list.
 - **Defaults:** an action not listed in `scopes` requires `<resource>:<action>`, where
-  `<resource>` is the entity's persist resource name, as in `employees:read` and
-  `employees:create`.
+  `<resource>` is the entity's collection name, as in `employees:read` and
+  `projectAssignments:create`.
 - **Authentication only:** an empty list, as in `read: []`, requires an authenticated caller
   and no scope.
 - **Coverage:** the `read` scopes of an entity cover those of a related entity when every
@@ -1278,6 +1283,17 @@ write it, creates fail on a `NOT NULL` column without a database default, persis
 migrations lose the column, `pull` adds it back, and a relation that uses it cannot be declared.
 `Internal` keeps the field in the model and out of the API.
 
+### Persist's resource names as collection names
+
+The collections could use the persist client's resource names, so that a path such as
+`/projectassignments` matched the client's `dbClient->/projectassignments`. Persist lowercases
+the whole entity name, a default kept from its first design's table names, while Ballerina names
+fields in camelCase and persist itself generates foreign keys such as `projectAssignmentId`. An
+API would then spell one entity two ways: `/projectassignments/7` and
+`/employees/4/projectAssignments`. Collections use camelCase instead, and
+[ballerina-library#9434](https://github.com/ballerina-platform/ballerina-library/issues/9434) proposes the same rule for persist; adopting it would change no
+path of the service.
+
 ### Field rules on the relation field
 
 A rule on the relation field could govern both the relation and its foreign key, so that a
@@ -1335,6 +1351,7 @@ array.
   and on a one-to-one foreign key;
   `Internal` on each relation field, and on the foreign key hiding both directions.
 - **Code generation:** expected-output tests for each protocol, with single and composite keys,
+  one-word, multi-word and irregularly pluralized entity names,
   every action combination, `auth` on and off, and the default and custom base path.
 - **Auth warnings:** `scopes` with `auth = false`.
 - **Relation auth:** with `auth = true`, a relation whose `read` scopes are covered, generated
