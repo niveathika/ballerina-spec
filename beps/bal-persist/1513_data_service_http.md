@@ -59,7 +59,7 @@ service /api on dataserviceListener {
 
 ### Operations
 
-For an entity `Employee` whose persist resource name is `employees`, with key `id`:
+For an entity `Employee` whose collection name is `employees`, with key `id`:
 
 | Operation | Action | Request | Success response |
 |---|---|---|---|
@@ -668,7 +668,8 @@ public type EmployeeListCreated record {|
 ## Testing
 
 - Code generation: expected-output tests for single and composite keys, every action
-  combination, and a custom base path.
+  combination, and a custom base path; the paths of a multi-word entity, `/api/projectAssignments`,
+  and of an irregular plural, `/api/people`.
 - Behaviour, against H2 and every other SQL datastore available to the test run: every row of
   the operations and errors tables, including `405` for a disabled method and `400` for a
   mistyped key; `204` for patch, delete and `PATCH {}` on an entity without `read`; `201` with
