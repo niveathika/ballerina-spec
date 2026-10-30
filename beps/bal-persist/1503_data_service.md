@@ -171,7 +171,7 @@ equivalent. This proposal refers to the keys by their dotted names.
 | `options.dataservice.protocol` | yes | — | The protocol the service is generated for; see [Protocol values](#protocol-values) |
 | `options.dataservice.basePath` | no | `/api` for `http`, `/graphql` for `graphql`, `/mcp` for `mcp` | The service's base path |
 | `options.dataservice.auth` | no | `false` | Whether the service is generated with authentication and scopes; see [Auth](#auth) |
-| `options.dataservice.introspection` | no | `true`, or `false` when `auth` is `true` | Whether the service publishes its own description; see [Documentation](#documentation) |
+| `options.dataservice.introspection` | no | `true` | Whether the service publishes its own description; see [Documentation](#documentation) |
 
 `basePath` must start with `/`. A trailing `/` is removed, and `/` alone serves the service at
 the root. Each segment must be non-empty and contain only letters, digits, `_`, `-` and `.`.
@@ -423,7 +423,6 @@ and does nothing in any other source.
 | An annotated entity has no unsupported data types | — | persist tool | error |
 | At least one entity is annotated | — | persist tool | error |
 | `scopes` is set only when `options.dataservice.auth` is `true` | — | persist tool | warning |
-| With `auth = true`, the `read` scopes of each entity cover those of every related entity; see [Auth](#auth) | — | persist tool | warning, per relation |
 
 The persist tool reads the annotation from the model's syntax tree, not from compiled values.
 `operations` is a list literal whose members are `Operation` members, such as
@@ -459,7 +458,6 @@ codes are left to the implementation.
 | An empty scope or one with whitespace | error | `invalid scope '<value>' in the @dataservice:Expose annotation of the entity '<Entity>'.` |
 | Scopes for an action that is not enabled | error | `the @dataservice:Expose annotation of the entity '<Entity>' sets scopes for '<action>', which is not in 'operations'.` |
 | `scopes` set while `options.dataservice.auth` is not `true` | warning | `the @dataservice:Expose annotation of the entity '<Entity>' sets scopes, but 'options.dataservice.auth' is not true, so no scope is checked.` |
-| With `auth = true`, a relation whose `read` scopes are not covered | warning | `the relation '<relation>' of the entity '<Entity>' is always refused in 'fields' and get related, because the 'read' scopes of '<Entity>' do not cover those of '<Target>'. Give both entities a shared 'read' scope.` |
 | Annotations without `options.dataservice` | warning | `the model has @dataservice:Expose annotations, but no data service is generated. Set 'options.dataservice.protocol' in the [[tool.persist]] entry to generate one.` |
 | `pull` skips an entity | warning | `the table '<table>' has an unsupported data type, so its entity '<Entity>' is not exposed.` |
 | `generate` without `--dataservice` on an annotated model | info | `the model has @dataservice:Expose annotations. Use the '--dataservice' option to also generate a data service.` |
@@ -536,6 +534,10 @@ every protocol uses the same formats.
 | `<Entity>` | The result of every operation that returns a record |
 | `<Entity>Insert` | The input to create one and create many |
 | `<Entity>Update` | The input to patch one |
+
+A relation's foreign key fields are fields of these types, whether the model declares them with
+`@sql:Relation` or persist infers them from the relation field, such as `departmentId` for
+`Employee.department`. They are returned, filtered, sorted and written like any other field.
 
 Get many and create many return an envelope rather than a bare array:
 
@@ -661,24 +663,37 @@ returning it.
 
 ##### Relation fields
 
-The owning side of a relation holds the foreign key, so the annotation on its relation field
-governs both the foreign key fields and the relation. The other side has no foreign key, so
-only `Internal` applies to it.
+A relation has two kinds of field, and each takes its own rules. Its foreign key fields hold
+the data, so the field rules apply to them as to any field. Its relation fields, one on each
+side, are directions of navigation, so only `Internal` applies to them:
 
-| Annotation | Owning side, such as `Employee.department` | Other side, such as `Department.employees` |
+| Annotation | Foreign key field, such as `Employee.departmentId` | Relation field, such as `Employee.department` or `Department.employees` |
 |---|---|---|
-| none | Get related and `fields`; foreign key returned and written | Get related and `fields` |
-| `ReadOnly` | Get related and `fields`; foreign key returned, never written | Compile error |
-| `Immutable` | Foreign key set on create, never changed | Compile error |
-| `Internal` | No get related or `fields` from either side; foreign key neither returned nor written | No get related or `fields` from this side |
+| none | Returned and written | Get related and `fields` in this direction |
+| `ReadOnly` | Returned, never written | Compile error |
+| `Immutable` | Set on create, never changed | Compile error |
+| `Internal` | Neither returned nor written; no get related or `fields` in either direction | No get related or `fields` in this direction; the foreign key is still returned and written |
 
-Internal on the owning side also hides the other side's relation, because reading related
-records through it filters on the hidden foreign key.
+```ballerina
+type Employee record {|
+    readonly int id;
+    @dataservice:Immutable
+    int departmentId;
+    @sql:Relation {keys: ["departmentId"]}
+    @dataservice:Internal
+    Department department;
+|};
+```
 
-The `value` of a relation field is the related entity's key: one value for a single key, or a
-tuple in key order for a composite key. The rule always goes on the relation field, also when the
-foreign key fields are declared in the model with `@sql:Relation`, so a relation has its rule in
-one place whether its foreign key is inferred or declared.
+Here an employee's department is set on create and never changed, and
+`employees/[id]/department` is not offered, while `departments/[id]/employees` still is.
+
+- **Inferred foreign keys:** a foreign key that persist infers has no field in the model to
+  annotate. To give it a rule, declare it with `@sql:Relation`.
+- **Composite foreign keys:** each foreign key field takes the rule and its own `value`. The
+  foreign key fields of one relation have the same rule.
+- **Internal foreign keys:** reading related records in either direction filters on the foreign
+  key, so an `Internal` foreign key hides the relation from both sides.
 
 ##### Validation
 
@@ -691,9 +706,10 @@ in the persist tool on generation.
 | None of them on a key field, except `ReadOnly` on a `@sql:Generated` key | error | `the key field '<field>' of the entity '<Entity>' cannot have @dataservice:<rule>.` |
 | A `ReadOnly` or `Internal` field that is neither nullable nor generated gives `value` | error | `the field '<field>' of the entity '<Entity>' needs a 'value' in @dataservice:<rule>, because it is neither nullable nor generated.` |
 | `value` matches the field's type | error | `the 'value' in @dataservice:<rule> of the field '<field>' of the entity '<Entity>' is not a '<type>'.` |
-| `ReadOnly` or `Immutable` on a relation field only on the side that holds the foreign key | error | `@dataservice:<rule> cannot be used on the relation field '<field>' of the entity '<Entity>', which has no foreign key.` |
-| No rule on a foreign key field declared with `@sql:Relation` | error | `@dataservice:<rule> cannot be used on the foreign key field '<field>' of the entity '<Entity>'. Use it on the relation field '<relation>'.` |
-| A field rule that the entity's actions make meaningless: `Immutable` without `update`, `ReadOnly` without `create` and `update`, `Internal` without `read`, `create` and `update` | warning | `@dataservice:<rule> on the field '<field>' of the entity '<Entity>' has no effect, because the entity does not allow '<actions>'.`, where `<actions>` names each of those actions, joined by `' or '` |
+| No `ReadOnly` or `Immutable` on a relation field | error | `@dataservice:<rule> cannot be used on the relation field '<field>' of the entity '<Entity>'. Use it on the foreign key field, declared with @sql:Relation.` |
+| The foreign key fields of one relation have the same rule | error | `the foreign key fields of the relation '<relation>' of the entity '<Entity>' must have the same field rule.` |
+| No `ReadOnly` or `Internal` on the foreign key of a one-to-one relation when the entity allows `create`: the key is unique, so every create after the first would fail | error | `@dataservice:<rule> cannot be used on the foreign key field '<field>' of the entity '<Entity>', because its relation is one to one and every create would set the same value.` |
+| A field rule that the entity's actions make meaningless: `Immutable` without `update`, `ReadOnly` without `create` and `update`, `Internal` without `read`, `create` and `update`, and `Internal` on a relation field without `read` | warning | `@dataservice:<rule> on the field '<field>' of the entity '<Entity>' has no effect, because the entity does not allow '<actions>'.`, where `<actions>` names each of those actions, joined by `' or '` |
 
 ##### Not field rules
 
@@ -800,19 +816,29 @@ A relation field is read in two ways, both under the `read` action:
 | Get related | `employees/[4]/department`, `departments/[2]/employees` | The related records, with the query options of get many for a to-many relation |
 | A relation in `fields` | `fields` naming `department`, `department.name`, `employees` or `employees.name` | Each record with the related record, or the chosen fields of it, included |
 
+Persist models these kinds of relation, and each is read with the rules below:
+
+| Kind | In the model | Foreign key | Read |
+|---|---|---|---|
+| One to many | `Employee.department` and `Department.employees` | On the many side: `Employee.departmentId` | To-one from `Employee`, to-many from `Department` |
+| One to one | `Profile.employee` and the nullable `Employee.profile` | On the side whose relation field is not nullable: `Profile.employeeId`, which persist makes unique | To-one from both sides; from `Employee` it can be empty |
+| From an entity to itself | Not supported by persist, which rejects it with `an entity cannot reference itself in a relation field` | — | — |
+| Many to many | Not supported by persist; a join entity, such as `Assignment`, with a one-to-many relation to each side | On the join entity: `Assignment.employeeId` and `Assignment.projectCode` | Through the join entity, such as `assignments` filtered by `employeeId` with `fields` naming `project` |
+
 - **Exposure:** get related and a relation in `fields` are offered only when both the entity and
-  the related entity allow `read`. A relation needs no annotation of its own: a caller who can
-  read both entities can already reach the related records through the foreign key, so a
-  separate switch would protect nothing. When the related entity does not allow `read`, the
-  foreign key fields are still returned as fields of the record.
+  the related entity allow `read`, and neither the relation field nor the foreign key is
+  `Internal`; see [Relation fields](#relation-fields). A relation needs no annotation to be
+  offered: a caller who can read both entities can already reach the related records through
+  the foreign key, so `Internal` on a relation field shapes the API rather than protecting
+  data. When the related entity does not allow `read`, the foreign key fields are still
+  returned as fields of the record.
 - **Default:** without `fields`, or when `fields` names no relation, no related record is
   included, so a plain read costs one query.
 - **One hop:** `fields` on get many or get one can name the entity's relations and their own
   fields, such as `department.name`, but not a relation of a related entity, such as
   `department.employees`. `fields` on get related names only the related entity's own fields.
 - **Related type:** an included related record is a `<Target>RelatedPartial`, which has the
-  related entity's own fields and no relation fields, so a relation from an entity to itself
-  also stays one hop. Its key fields are always returned.
+  related entity's own fields and no relation fields. Its key fields are always returned.
 - **To-one in `fields`:** an empty to-one relation, whose foreign key is null, and one whose
   foreign key points at a missing record, are included as `null`.
 - **To-many in `fields`:** an included to-many relation is a list envelope, `items` and
@@ -914,7 +940,7 @@ the GraphQL `errors` array, or an MCP tool result with `isError` set.
 | Conflict | `CONFLICT` | A record with the key or a unique value already exists | `persist:AlreadyExistsError` |
 | Constraint violation | `CONSTRAINT_VIOLATION` | A write violates a foreign key | `persist:ConstraintViolationError` |
 | Invalid input | `INVALID_INPUT` | The input cannot be bound to the operation's type, a value is not in its format, or a value breaks a constraint of the model | The protocol module's binding or validation error, or a `ballerina/dataservice` check or conversion |
-| Forbidden | `FORBIDDEN` | Get related or a relation in `fields` needs `read` scopes that the entity's `read` scopes do not cover; see [Auth](#auth) | `ballerina/dataservice` |
+| Forbidden | `FORBIDDEN` | Get related or a relation in `fields`, when the caller holds no `read` scope of the related entity; see [Auth](#auth) | The protocol module's relation check |
 | Internal | `INTERNAL` | Any other failure | `persist:Error` and others |
 
 The message is written by `ballerina/dataservice`, not taken from the persist error, because the
@@ -926,7 +952,7 @@ SQL datastores put driver text, such as table and constraint names, in their err
 | Conflict | `A record that conflicts with an existing record of the entity '<Entity>' already exists.` |
 | Constraint violation | `The operation violates a constraint of the entity '<Entity>'.` |
 | Invalid input, a constraint broken on a field of a wire type | `The field '<field>' of the entity '<Entity>' breaks its '<constraint>' constraint.` |
-| Forbidden | `The relation '<relation>' of the entity '<Entity>' needs 'read' scopes that the entity's 'read' scopes do not cover.` |
+| Forbidden | `The relation '<relation>' of the entity '<Entity>' needs a 'read' scope of the entity '<Target>'.` |
 | Internal | `An internal error occurred.` |
 
 A composite key is written as its values joined by `/`, in key order.
@@ -961,12 +987,14 @@ generated only when `options.dataservice.auth` is `true`:
   caller allowed to read the entity is also allowed to read the related entity: the related
   entity's `read` list is empty, or the entity's `read` list is not empty and every scope in it
   is also in the related entity's list.
-- **Get related** and **a relation in `fields`** are protected by the entity's own `read`
-  scopes. They are allowed only when those scopes cover the related entity's `read` scopes;
-  otherwise the request is answered with `FORBIDDEN`. The generator works this out from the
-  annotations, and the persist tool warns, per relation, about each relation that is always
-  refused. Giving both entities a shared `read` scope allows it. Checking the caller's own
-  scopes instead, so that such a request succeeds for a caller who has both, is later work.
+- **Get related** and **a relation in `fields`** require the entity's own `read` scopes, like
+  every read of the entity, and the caller must also be allowed to read the related entity.
+  When the entity's `read` scopes cover the related entity's, every caller who passed the first
+  check is allowed, and nothing more is checked. Otherwise the service checks the caller's
+  credential against the related entity's `read` scopes when the request runs, and answers
+  with `FORBIDDEN` when it holds none of them. The generator works out from the annotations
+  which relations need the check; giving both entities a shared `read` scope avoids it. The
+  protocol proposal says how the credential is checked.
 
 ```ballerina
 @dataservice:Expose {scopes: {read: ["hr:read"], delete: ["hr:admin"]}}
@@ -1010,6 +1038,10 @@ type Employee record {|
 |};
 ```
 
+A foreign key field without a doc comment gets one that names its relation, such as
+`The key of the related 'Department'.`, so the description shows the link also where the
+relation itself is not offered.
+
 The same doc comments describe the service in every protocol: as OpenAPI descriptions for HTTP,
 as schema descriptions for GraphQL, and as tool and argument descriptions for MCP. A user adds
 documentation the way they document any Ballerina type, with no annotation to learn.
@@ -1023,10 +1055,9 @@ The service publishes its own description at runtime, as each protocol expects:
 | MCP | The tool list | Published, because an MCP client needs it to use the service |
 
 The description holds nothing a caller cannot learn by calling the service, so it is published
-by default when the service has no auth. With `auth = true`, `introspection` defaults to
-`false`, because a protocol may publish the description without applying the service's auth;
-the protocol proposal says whether it does. An explicit `introspection` value applies in both
-cases.
+by default. With `auth = true`, it is published behind the service's auth, so only an
+authenticated caller reads it; the protocol proposal says how. `introspection = false`
+withholds it.
 
 The persist tool does not keep the model's doc comments in the types it generates today, and a
 data service uses those types for entities without wire types. Keeping them is a persist
@@ -1247,6 +1278,40 @@ write it, creates fail on a `NOT NULL` column without a database default, persis
 migrations lose the column, `pull` adds it back, and a relation that uses it cannot be declared.
 `Internal` keeps the field in the model and out of the API.
 
+### Field rules on the relation field
+
+A rule on the relation field could govern both the relation and its foreign key, so that a
+relation has its rule in one place whether its foreign key is inferred or declared. One
+annotation then carries two meanings: `Internal` on the owning side would hide the foreign key
+and both directions, with no way to hide only one direction and keep the key. Rules on the
+foreign key fields, and `Internal` alone on relation fields, keep data and navigation apart.
+The cost is that an inferred foreign key must be declared to take a rule.
+
+### An annotation for relations
+
+A separate annotation could control navigation: `@dataservice:ExposeRelation` to offer a
+relation, or `@dataservice:NoRelation` to withhold one. Offering relations only on request
+would match `@dataservice:Expose`, but `Expose` is opt-in because an entity can hold data that
+must not be public, while a relation between two readable entities reveals nothing new. Turning
+one off only shapes the API, which `Internal` on the relation field already says without a
+second annotation.
+
+### The relation field holding the foreign key
+
+Directus and Strapi return a relation as its foreign key, `"department": 2`, and the same
+field becomes the related record when the caller asks for it. The field's type then changes
+with `fields`, which a typed client and an OpenAPI definition cannot describe as one type, and
+every entity with a relation needs wire types in place of the persist types, which already hold
+the foreign key fields.
+
+### Reference objects for relations
+
+JSON:API returns a relation as a reference, `{"type": "departments", "id": "2"}`, and keeps
+foreign keys out of the attributes; Spring Data REST returns a link. Both hide the table's
+structure, but need new types for every entity with a relation, make payloads larger, need a
+syntax of their own to filter by a related key, and make the client follow a reference that a
+plain foreign key field gives directly.
+
 ### Several protocols from one entry
 
 The listeners of `ballerina/graphql` and `ballerina/mcp` both accept an `http:Listener`, so
@@ -1266,11 +1331,14 @@ array.
   operations; a model with no annotated entity; each field rule check.
 - **Field rules:** per rule, the field returned or not, accepted or rejected on create and
   update, `value` set on create, an `Internal` field absent from `fields`, filters, sorting,
-  get related and error messages, and the relation-field cases.
+  get related and error messages; each rule on a declared foreign key, single and composite,
+  and on a one-to-one foreign key;
+  `Internal` on each relation field, and on the foreign key hiding both directions.
 - **Code generation:** expected-output tests for each protocol, with single and composite keys,
   every action combination, `auth` on and off, and the default and custom base path.
-- **Auth warnings:** `scopes` with `auth = false`; with `auth = true`, a relation whose `read`
-  scopes are covered and one whose are not.
+- **Auth warnings:** `scopes` with `auth = false`.
+- **Relation auth:** with `auth = true`, a relation whose `read` scopes are covered, generated
+  without the check, and one whose are not, generated with it.
 - **Query building:** per datastore, quoted identifiers, null ordering, and escaping in
   `contains` and `startsWith`; an empty `anyOf`; `ne` on a nullable field; a field named twice
   in `sort`; the `fields` edge cases; an `offset` too large for the `size`.
@@ -1324,10 +1392,7 @@ array.
   ([ballerina-library#9386](https://github.com/ballerina-platform/ballerina-library/issues/9386)). Atomic creates
   need the SQL client to take part in a Ballerina `transaction`, as `ballerinax/persist.sql`
   1.7.4 does.
-  Constraint violations on create and delete need the SQL client to classify a foreign key
-  violation on insert and delete as `persist:ConstraintViolationError`
-  ([ballerina-library#9359](https://github.com/ballerina-platform/ballerina-library/issues/9359)),
-  as it does on update. Constraint checks need the persist tool to keep every constraint in
+  Constraint checks need the persist tool to keep every constraint in
   the generated types
   ([ballerina-library#9376](https://github.com/ballerina-platform/ballerina-library/issues/9376)).
   The persist changes that later work needs, such as a runtime projection
@@ -1358,9 +1423,9 @@ listener configuration.
 | Area | Adds | Fits into v1 through |
 |---|---|---|
 | More query options | `or` and nested filter groups, a total count, reading only the selected fields from the database | The filter tree; the `<Entity>List` envelope; the reserved `$` names |
-| More auth | Row-level rules and fields visible only to some scopes; relations in `fields` checked against the caller's own scopes | Scopes per action; annotations that only narrow |
+| More auth | Row-level rules and fields visible only to some scopes | Scopes per action; annotations that only narrow |
 | More datastores | The in-memory datastore, with query options applied in the service and its text comparison rules documented | The same query options and results |
-| More relations | Nested writes, filtering and sorting on related fields, relations more than one hop away | Get related and relations in `fields`; the `read` action |
+| More relations | Nested writes, filtering and sorting on related fields, relations more than one hop away, many to many through a join entity that holds only the two keys, read as one hop | Get related and relations in `fields`; the `read` action |
 | More write operations | Upsert, full replace, update or delete by filter, once the persist client supports them | The `create`, `update` and `delete` actions |
 | Concurrency control | Optimistic concurrency through `ETag` and `If-Match` | Patch and delete by key |
 | Custom operations | Named queries exposed as operations | The reserved `EXECUTE` action |
