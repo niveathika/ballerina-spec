@@ -509,11 +509,13 @@ It is exposed as a patch.
 
 #### Addressing
 
-- **Collection name:** the entity name with its first letter in lowercase and its last word
+- **Collection name:** the entity name with its first word in lowercase and its last word
   pluralized as persist pluralizes resource names: `employees` for `Employee`,
-  `projectAssignments` for `ProjectAssignment` and `people` for `Person`. This deviates from the
-  persist client's resource name, which lowercases the whole name, as in `projectassignments`,
-  so that a collection is spelled like the relation fields and the foreign key fields that
+  `projectAssignments` for `ProjectAssignment`, `people` for `Person` and `httpLogs` for
+  `HTTPLog`. A new word starts at an uppercase letter after a lowercase letter or digit, and at
+  the last uppercase letter of a run followed by a lowercase letter, so `HTTPLog` is `HTTP` and
+  `Log`. This deviates from the persist client's resource name, which lowercases the whole name,
+  as in `projectassignments`, so that a collection is spelled like the relation fields that
   name it; [ballerina-library#9434](https://github.com/ballerina-platform/ballerina-library/issues/9434) proposes the same rule for persist. The two names
   are the same for an entity whose name is one word.
 - **Key:** the entity's `readonly` fields, in declaration order. Every persist entity has a key,
@@ -1308,8 +1310,8 @@ migrations lose the column, `pull` adds it back, and a relation that uses it can
 The collections could use the persist client's resource names, so that a path such as
 `/projectassignments` matched the client's `dbClient->/projectassignments`. Persist lowercases
 the whole entity name, a default kept from its first design's table names, while Ballerina names
-fields in camelCase and persist itself generates foreign keys such as `projectAssignmentId`. An
-API would then spell one entity two ways: `/projectassignments/7` and
+fields in camelCase, as in the relation field `projectAssignments`. An API would then spell one
+entity two ways: `/projectassignments/7` and
 `/employees/4/projectAssignments`. Collections use camelCase instead, and
 [ballerina-library#9434](https://github.com/ballerina-platform/ballerina-library/issues/9434) proposes the same rule for persist; adopting it would change no
 path of the service.
