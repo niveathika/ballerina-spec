@@ -48,7 +48,8 @@ module:
 
 ```ballerina
 final Client dataserviceClient = check new ();
-listener http:Listener dataserviceListener = new (dataservicePort, dataserviceListenerConfig);
+listener http:Listener dataserviceListener =
+        new (dataserviceConfig.port, dataserviceConfig.listenerConfig);
 
 service /api on dataserviceListener {
     // one group of resources per exposed entity
@@ -80,8 +81,8 @@ For an entity `Employee` whose collection name is `employees`, with key `id`:
   `ballerinax/persist.sql` 1.7.4, a batch with a duplicate key in the middle saved the other
   records without a transaction, and saved none inside a Ballerina `transaction`.
 - **Create many has no `Location` header**, because it creates several resources.
-- **Create many takes at most `dataserviceMaxPageSize` records.** A larger array is answered
-  with `400` and `INVALID_INPUT`.
+- **Create many takes at most `dataserviceConfig.maxPageSize` records.** A larger array is
+  answered with `400` and `INVALID_INPUT`.
 - **Patch is partial.** Fields left out of the body are not changed. A field set to `null` is
   set to `null` when the field is nullable.
 - **Delete returns the deleted record**, as the persist client does, when the entity allows
@@ -356,7 +357,7 @@ from `ballerina/dataservice`, with the code and message #1503 defines for the ca
 | Not found | `404` | `NOT_FOUND` | `persist:NotFoundError` ✅ |
 | Conflict | `409` | `CONFLICT` | `persist:AlreadyExistsError` ✅ |
 | Constraint violation | `409` | `CONSTRAINT_VIOLATION` | `persist:ConstraintViolationError` |
-| Invalid input | `400` | `INVALID_INPUT` | a date, time or `byte[]` value that does not parse; a constraint broken on a field of a wire type; an unusable `sort` or `fields` name, a field named twice in `sort`, an empty `fields`, `size` below 1, `offset` below 0 or too large for the `size`; a create above `dataserviceMaxPageSize` records; a `float` key that is not finite |
+| Invalid input | `400` | `INVALID_INPUT` | a date, time or `byte[]` value that does not parse; a constraint broken on a field of a wire type; an unusable `sort` or `fields` name, a field named twice in `sort`, an empty `fields`, `size` below 1, `offset` below 0 or too large for the `size`; a create above `dataserviceConfig.maxPageSize` records; a `float` key that is not finite |
 | Invalid input | `400` | — | `ballerina/http` payload or path binding ✅; a constraint broken on an entity without wire types |
 | Internal | `500` | `INTERNAL` | any other error |
 | Unauthenticated | `401` | — | `ballerina/http` auth, before the resource runs ✅ |
@@ -401,12 +402,12 @@ PUT  /api/employees/2                         → 405
 ### Auth
 
 With `options.dataservice.auth = false`, the default, the service has no auth annotations and
-`dataservice_config.bal` declares no `dataserviceAuth`.
+`DataserviceConfig` has no `auth` field.
 
 With `auth = true`, the service passes `dataserviceAuthConfig`, the checked value of
-`dataserviceAuth` from [Configuration](#configuration), to `@http:ServiceConfig`, and each
-resource requires the scopes of its action through `@http:ResourceConfig`, which accepts scopes
-alone and takes the providers from the service:
+`dataserviceConfig.auth` from [Configuration](#configuration), to `@http:ServiceConfig`, and
+each resource requires the scopes of its action through `@http:ResourceConfig`, which accepts
+scopes alone and takes the providers from the service:
 
 ```ballerina
 @http:ServiceConfig {auth: dataserviceAuthConfig}
@@ -417,11 +418,13 @@ service /api on dataserviceListener {
 }
 ```
 
-- **Required providers:** `dataserviceAuth` is a required configurable value without a
-  default, so the program does not start when `Config.toml` does not set it. An empty list
-  also stops it at startup, through a module-level `check` on `dsHttp:authConfig`, with the
-  message
-  `The configurable value 'dataserviceAuth' must hold at least one authentication provider.`
+- **Required providers:** `auth` is a required field of `dataserviceConfig` without a
+  default, so the program does not start when `Config.toml` does not set it. ✅ On Ballerina
+  2201.14.0, it stopped with `value not provided for non-defaultable required field 'auth' of
+  record '<module>:DataserviceConfig' in configurable variable 'dataserviceConfig'`.
+  An empty list also stops it at startup, through a module-level `check` on
+  `dsHttp:authConfig`, with the message
+  `The configurable value 'dataserviceConfig.auth' must hold at least one authentication provider.`
 - **Authentication only:** an action with an empty scope list gets no `@http:ResourceConfig`
   auth, so the service's providers apply alone.
 - **Responses:** `ballerina/http` answers a missing or invalid credential with `401` and a
@@ -456,11 +459,11 @@ service /api on dataserviceListener {
 For example, to validate JWTs, set in `Config.toml`:
 
 ```toml
-[[dataserviceAuth]]
-[dataserviceAuth.jwtValidatorConfig]
+[[dataserviceConfig.auth]]
+[dataserviceConfig.auth.jwtValidatorConfig]
 issuer = "https://idp.example.com"
 audience = "hr-api"
-[dataserviceAuth.jwtValidatorConfig.signatureConfig.jwksConfig]
+[dataserviceConfig.auth.jwtValidatorConfig.signatureConfig.jwksConfig]
 url = "https://idp.example.com/jwks"
 ```
 
@@ -507,34 +510,42 @@ the service and its doc comments, and `ballerina/http` serves it with Swagger UI
 | Base path | `options.dataservice.basePath` | `/api` |
 | Auth | `options.dataservice.auth` | `false` |
 | Publishing the OpenAPI definition | `options.dataservice.introspection` | `true` |
-| Port | `dataservicePort` in `Config.toml` | `9090` |
-| Page size when `size` is not given | `dataservicePageSize` in `Config.toml` | `100` |
-| Largest page size | `dataserviceMaxPageSize` in `Config.toml` | `1000` |
-| Authentication providers | `dataserviceAuth` in `Config.toml` | none: required when `auth` is `true`, and not declared otherwise |
-| Other listener settings, such as TLS and timeouts | `dataserviceListenerConfig` in `Config.toml` | `ballerina/http`'s defaults |
+| Port | `port` of `[dataserviceConfig]` in `Config.toml` | `9090` |
+| Page size when `size` is not given | `pageSize` of `[dataserviceConfig]` | `100` |
+| Largest page size | `maxPageSize` of `[dataserviceConfig]` | `1000` |
+| Authentication providers | `auth` of `[dataserviceConfig]` | none: required when `auth` is `true`, and not declared otherwise |
+| Other listener settings, such as TLS and timeouts | `listenerConfig` of `[dataserviceConfig]` | `ballerina/http`'s defaults |
 
-`dataservice_config.bal` declares the configurable values:
+`dataservice_config.bal` declares the record #1503 gives, with HTTP's fields added:
 
 ```ballerina
-configurable int dataservicePort = 9090;
-configurable http:ListenerConfiguration dataserviceListenerConfig = {};
-configurable int dataservicePageSize = 100;
-configurable int dataserviceMaxPageSize = 1000;
-// Only with options.dataservice.auth = true
-configurable http:ListenerAuthConfig[] dataserviceAuth = ?;
+type DataserviceConfig record {|
+    int port = 9090;
+    http:ListenerConfiguration listenerConfig = {};
+    int pageSize = 100;
+    int maxPageSize = 1000;
+    // Only with options.dataservice.auth = true
+    http:ListenerAuthConfig[] auth;
+|};
+
+// `= ?` with options.dataservice.auth = true, because `auth` has no default
+configurable DataserviceConfig dataserviceConfig = {};
 
 final dataservice:PageConfig dataservicePageConfig =
-        check dataservice:pageConfig(dataservicePageSize, dataserviceMaxPageSize);
+        check dataservice:pageConfig(dataserviceConfig.pageSize, dataserviceConfig.maxPageSize);
 // Only with options.dataservice.auth = true
-final http:ListenerAuthConfig[] dataserviceAuthConfig = check dsHttp:authConfig(dataserviceAuth);
+final http:ListenerAuthConfig[] dataserviceAuthConfig =
+        check dsHttp:authConfig(dataserviceConfig.auth);
 ```
 
-The program stops at startup, with the messages #1503 gives, when a page size is out of range.
+The field is `listenerConfig`, not `listener`, because `listener` is a keyword. The program
+stops at startup, with the messages #1503 gives, when a page size is out of range or a field
+is unknown.
 
 For example, to serve over TLS:
 
 ```toml
-[dataserviceListenerConfig.secureSocket.key]
+[dataserviceConfig.listenerConfig.secureSocket.key]
 certFile = "/path/to/public.crt"
 keyFile = "/path/to/private.key"
 ```
@@ -674,10 +685,11 @@ public type EmployeeListCreated record {|
   the operations and errors tables, including `405` for a disabled method and `400` for a
   mistyped key; `204` for patch, delete and `PATCH {}` on an entity without `read`; `201` with
   `{"items": [], "hasMore": false}` for `POST []`; a create many with a duplicate key among its
-  records, which creates none; a create above `dataserviceMaxPageSize` records.
+  records, which creates none; a create above `dataserviceConfig.maxPageSize` records.
 - Keys: a `Location` round trip for a `float` key, and `400` for a `NaN` or `Infinity` key.
-- Startup: an out-of-range page size, and with `auth = true`, a missing or empty
-  `dataserviceAuth`, each stopping the program with its message.
+- Startup: an out-of-range page size, an unknown field of `[dataserviceConfig]`, and with
+  `auth = true`, a missing or empty `dataserviceConfig.auth`, each stopping the program with
+  its message.
 - The OpenAPI definition: the `Link` header, the definition with the generated summaries and
   the model's descriptions, Swagger UI, and none of them with `introspection = false`.
 - Field rules: per rule, the wire types generated, a `ReadOnly` field ignored on create and
