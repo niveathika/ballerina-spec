@@ -70,8 +70,8 @@ For an entity `Employee` whose collection name is `employees`, with key `id`:
 | Get related, to-many | `read` | `GET /api/departments/{id}/employees` with the query parameters | `200`, `{"items": [Employee, ...], "hasMore": false}` |
 | Create one | `create` | `POST /api/employees` with an `EmployeeInsert` object | `201`, `Location: /api/employees/{id}`, the created `Employee` |
 | Create many | `create` | `POST /api/employees` with an array of `EmployeeInsert` | `201`, `{"items": [Employee, ...], "hasMore": false}` |
-| Patch one | `update` | `PATCH /api/employees/{id}` with an `EmployeeUpdate` object | `200`, the updated `Employee`; `204` when the entity does not allow `read` |
-| Delete one | `delete` | `DELETE /api/employees/{id}` | `200`, the deleted `Employee`; `204` when the entity does not allow `read` |
+| Patch one | `update` | `PATCH /api/employees/{id}` with an `EmployeeUpdate` object | `200`, the updated `Employee`; `204` when the entity does not allow `read` or the caller may not read it |
+| Delete one | `delete` | `DELETE /api/employees/{id}` | `200`, the deleted `Employee`; `204` when the entity does not allow `read` or the caller may not read it |
 
 - **Create one and create many share one route.** The payload parameter is typed
   `EmployeeInsert|EmployeeInsert[]`; `ballerina/http` binds a JSON object to the first type and
@@ -87,11 +87,12 @@ For an entity `Employee` whose collection name is `employees`, with key `id`:
   set to `null` when the field is nullable.
 - **Delete returns the deleted record**, as the persist client does, when the entity allows
   `read`. A client that does not need it can ignore the body.
-- **Without `read`,** patch and delete answer `204 No Content` with no body.
+- **Without `read`,** patch and delete answer `204 No Content` with no body. So do they, with
+  `auth = true`, for a caller who holds no `read` scope of the entity; see [Auth](#auth).
 - **An empty array creates nothing.** `POST` with `[]` is answered with `201` and
   `{"items": [], "hasMore": false}`, without calling the persist client.
-- **An empty patch changes nothing.** `PATCH` with `{}` is answered as get one when the entity
-  allows `read`, and with `204` without reading otherwise. Neither calls the persist client's
+- **An empty patch changes nothing.** `PATCH` with `{}` is answered as get one when the record
+  would be returned, and with `204` without reading otherwise. Neither calls the persist client's
   update, which would have no columns to set.
 - **Key fields cannot be patched.** `EmployeeUpdate` is a closed record without the key fields,
   so a body that sets one is answered with `400` by `ballerina/http`.
@@ -460,6 +461,16 @@ service /api on dataserviceListener {
   `http:ListenerOAuth2Handler`. It tries them in the order of the list, as `ballerina/http`
   does, and the first that authenticates the credential decides with its `authorize`. A
   credential that no provider authenticates holds no scope.
+- **Patch and delete results:** for an entity whose `read` scopes do not cover its `update` or
+  `delete` scopes, as #1503 defines, patch and delete call `dsHttp:holdsScope` with the
+  entity's `read` scopes, which checks the credential in the same way and returns `true` when
+  it holds one of them. Without one, they answer `204` and, for an empty patch, do not read:
+
+  ```ballerina
+  if !dsHttp:holdsScope(request, ["employees:read"]) {
+      return http:NO_CONTENT;
+  }
+  ```
 
 For example, to validate JWTs, set in `Config.toml`:
 
@@ -581,13 +592,13 @@ service /api on dataserviceListener {
         // with one query on their keys.
     }
 
-    resource function patch employees/[int id](EmployeeUpdate payload)
-            returns Employee|dsHttp:NotFound|dsHttp:InvalidInput|dsHttp:Conflict
-                |dsHttp:ConstraintViolation|dsHttp:InternalError { ... }
+    resource function patch employees/[int id](http:Request request, EmployeeUpdate payload)
+            returns Employee|http:NoContent|dsHttp:NotFound|dsHttp:InvalidInput
+                |dsHttp:Conflict|dsHttp:ConstraintViolation|dsHttp:InternalError { ... }
 
-    resource function delete employees/[int id]()
-            returns Employee|dsHttp:NotFound|dsHttp:InvalidInput|dsHttp:ConstraintViolation
-                |dsHttp:InternalError { ... }
+    resource function delete employees/[int id](http:Request request)
+            returns Employee|http:NoContent|dsHttp:NotFound|dsHttp:InvalidInput
+                |dsHttp:ConstraintViolation|dsHttp:InternalError { ... }
 }
 ```
 
@@ -595,6 +606,9 @@ service /api on dataserviceListener {
   `byte[]` field, such as `Employee` with `hiredOn`, uses its wire types in their place, such
   as `EmployeePayload`; see [Wire types](#wire-types).
 - **Without `read`:** patch and delete return `http:NoContent` in place of the record.
+- **Patch and delete with `read`:** with `auth = true` and `update` or `delete` scopes that the
+  `read` scopes do not cover, as above, patch and delete take the `http:Request` and return
+  `Employee|http:NoContent`. Otherwise they return `Employee` alone and take no request.
 - **Return types:** each resource lists the error records it can return, so an OpenAPI
   definition generated from the service shows exactly its status codes:
 
@@ -688,9 +702,10 @@ public type EmployeeListCreated record {|
   and of an irregular plural, `/api/people`.
 - Behaviour, against H2 and every other SQL datastore available to the test run: every row of
   the operations and errors tables, including `405` for a disabled method and `400` for a
-  mistyped key; `204` for patch, delete and `PATCH {}` on an entity without `read`; `201` with
-  `{"items": [], "hasMore": false}` for `POST []`; a create many with a duplicate key among its
-  records, which creates none; a create above `dataserviceConfig.maxPageSize` records.
+  mistyped key; `204` for patch, delete and `PATCH {}` on an entity without `read`, and with
+  `auth = true` for a caller without a `read` scope; `201` with `{"items": [], "hasMore": false}`
+  for `POST []`; a create many with a duplicate key among its records, which creates none; a
+  create above `dataserviceConfig.maxPageSize` records.
 - Keys: a `Location` round trip for a `float` key, and `400` for a `NaN` or `Infinity` key.
 - Startup: an out-of-range page size, an unknown field of `[dataserviceConfig]`, and with
   `auth = true`, a missing or empty `dataserviceConfig.auth`, each stopping the program with
@@ -741,8 +756,9 @@ public type EmployeeListCreated record {|
 - **A second credential check for uncovered relations.** `dsHttp:authorizeRelation` checks the
   credential again after `ballerina/http` has: a JWT signature is verified again unless the
   provider's cache is configured, an OAuth2 token is introspected again unless its cache is
-  configured, and an LDAP user is looked up again. Only relations whose `read` scopes are not
-  covered pay this cost.
+  configured, and an LDAP user is looked up again. Only relations, and patch and delete, whose
+  scopes the `read` scopes do not cover pay this cost. With the default scopes, every patch and
+  delete pays it.
 - **Lost updates.** As in #1503, there is no `ETag` or `If-Match`, so concurrent `PATCH`
   requests on one record can overwrite each other.
 
