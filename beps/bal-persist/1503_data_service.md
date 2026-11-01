@@ -602,10 +602,13 @@ clients.
 - **Batch size:** create many accepts at most `dataserviceConfig.maxPageSize` records. More is
   invalid input.
 - **Patch and delete with `read`:** when the entity allows `read`, patch and delete return the
-  record, whatever the caller's `read` scopes: a caller allowed to update or delete an entity
-  sees the record it changed.
+  record only to a caller who is also allowed to read the entity, and no record to any other
+  caller. So `update` or `delete` alone does not reveal a record, for example through a patch
+  that sets no field. [Auth](#auth) says how the caller is checked.
 - **Patch and delete without `read`:** when the entity does not allow `read`, patch and delete
-  return no record, and a patch that sets no field reads nothing.
+  return no record.
+- **Empty patch:** a patch that sets no field changes nothing. It is answered as get one when
+  the record would be returned, and with no record, without reading, otherwise.
 
 #### Field rules
 
@@ -999,6 +1002,14 @@ generated only when `options.dataservice.auth` is `true`:
   caller allowed to read the entity is also allowed to read the related entity: the related
   entity's `read` list is empty, or the entity's `read` list is not empty and every scope in it
   is also in the related entity's list.
+- **Patch and delete results:** with `auth = true`, patch and delete return the record only
+  when the caller is also allowed to read the entity. The `read` scopes cover the action's when
+  every caller allowed the action is also allowed to read: the `read` list is empty, or the
+  action's list is not empty and every scope in it is also in the `read` list. Then nothing
+  more is checked. Otherwise the service checks the caller's credential against the `read`
+  scopes when the request runs, and returns no record when it holds none of them. The default
+  scopes, such as `employees:update` and `employees:read`, are not covered, so they need the
+  check.
 - **Get related** and **a relation in `fields`** require the entity's own `read` scopes, like
   every read of the entity, and the caller must also be allowed to read the related entity.
   When the entity's `read` scopes cover the related entity's, every caller who passed the first
@@ -1394,6 +1405,8 @@ record groups them under one table and catches a misspelled field.
 - **Auth warnings:** `scopes` with `auth = false`.
 - **Relation auth:** with `auth = true`, a relation whose `read` scopes are covered, generated
   without the check, and one whose are not, generated with it.
+- **Patch and delete auth:** with `auth = true`, a caller with and without a `read` scope gets
+  the record and no record; an empty patch by a caller without one reads nothing.
 - **Query building:** per datastore, quoted identifiers, null ordering, and escaping in
   `contains` and `startsWith`; an empty `anyOf`; `ne` on a nullable field; a field named twice
   in `sort`; the `fields` edge cases; an `offset` too large for the `size`.
