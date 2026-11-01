@@ -51,6 +51,7 @@ final Client dataserviceClient = check new ();
 listener http:Listener dataserviceListener =
         new (dataserviceConfig.port, dataserviceConfig.listenerConfig);
 
+@http:ServiceConfig {cors: dataserviceConfig.serviceConfig.cors}
 service http:InterceptableService /api on dataserviceListener {
 
     public function createInterceptors() returns dsHttp:ErrorInterceptor => new;
@@ -60,6 +61,9 @@ service http:InterceptableService /api on dataserviceListener {
 ```
 
 - **Base path:** the service's base path is `options.dataservice.basePath`, `/api` by default.
+- **CORS:** the service takes its CORS settings from `dataserviceConfig.serviceConfig.cors`,
+  and allows no cross-origin request by default. ✅ On Ballerina 2201.14.0, a preflight request
+  was answered with the origins and methods set in `Config.toml`.
 - **Error interceptor:** `dsHttp:ErrorInterceptor` gives the errors that `ballerina/http`
   raises before a resource runs the `DataserviceError` body; see [Errors](#errors).
 
@@ -420,29 +424,29 @@ PUT  /api/employees/2                         → 405  {"code":"INVALID_INPUT", 
 ### Auth
 
 With `options.dataservice.auth = false`, the default, the service has no auth annotations and
-`DataserviceConfig` has no `auth` field.
+`DataserviceServiceConfig` has no `auth` field.
 
 With `auth = true`, the service passes `dataserviceAuthConfig`, the checked value of
-`dataserviceConfig.auth` from [Configuration](#configuration), to `@http:ServiceConfig`, and
-each resource requires the scopes of its action through `@http:ResourceConfig`, which accepts
-scopes alone and takes the providers from the service:
+`dataserviceConfig.serviceConfig.auth` from [Configuration](#configuration), to
+`@http:ServiceConfig`, and each resource requires the scopes of its action through
+`@http:ResourceConfig`, which accepts scopes alone and takes the providers from the service:
 
 ```ballerina
-@http:ServiceConfig {auth: dataserviceAuthConfig}
-service /api on dataserviceListener {
+@http:ServiceConfig {auth: dataserviceAuthConfig, cors: dataserviceConfig.serviceConfig.cors}
+service http:InterceptableService /api on dataserviceListener {
 
     @http:ResourceConfig {auth: {scopes: ["hr:read"]}}
     resource function get employees(...) returns ... { ... }
 }
 ```
 
-- **Required providers:** `auth` is a required field of `dataserviceConfig` without a
-  default, so the program does not start when `Config.toml` does not set it. ✅ On Ballerina
-  2201.14.0, it stopped with `value not provided for non-defaultable required field 'auth' of
-  record '<module>:DataserviceConfig' in configurable variable 'dataserviceConfig'`.
-  An empty list also stops it at startup, through a module-level `check` on
-  `dsHttp:authConfig`, with the message
-  `The configurable value 'dataserviceConfig.auth' must hold at least one authentication provider.`
+- **Required providers:** `auth` is a required field of `dataserviceConfig.serviceConfig`
+  without a default, so the program does not start when `Config.toml` does not set it. ✅ On
+  Ballerina 2201.14.0, it stopped with `value not provided for non-defaultable required field
+  'auth' of record '<module>:DataserviceServiceConfig' in configurable variable
+  'dataserviceConfig.serviceConfig'`. An empty list also stops it at startup, through a
+  module-level `check` on `dsHttp:authConfig`, with the message
+  `The configurable value 'dataserviceConfig.serviceConfig.auth' must hold at least one authentication provider.`
 - **Authentication only:** an action with an empty scope list gets no `@http:ResourceConfig`
   auth, so the service's providers apply alone.
 - **Responses:** `ballerina/http` answers a missing or invalid credential with `401` and a
@@ -487,11 +491,11 @@ service /api on dataserviceListener {
 For example, to validate JWTs, set in `Config.toml`:
 
 ```toml
-[[dataserviceConfig.auth]]
-[dataserviceConfig.auth.jwtValidatorConfig]
+[[dataserviceConfig.serviceConfig.auth]]
+[dataserviceConfig.serviceConfig.auth.jwtValidatorConfig]
 issuer = "https://idp.example.com"
 audience = "hr-api"
-[dataserviceConfig.auth.jwtValidatorConfig.signatureConfig.jwksConfig]
+[dataserviceConfig.serviceConfig.auth.jwtValidatorConfig.signatureConfig.jwksConfig]
 url = "https://idp.example.com/jwks"
 ```
 
@@ -541,34 +545,53 @@ the service and its doc comments, and `ballerina/http` serves it with Swagger UI
 | Port | `port` of `[dataserviceConfig]` in `Config.toml` | `9090` |
 | Page size when `size` is not given | `pageSize` of `[dataserviceConfig]` | `100` |
 | Largest page size | `maxPageSize` of `[dataserviceConfig]` | `1000` |
-| Authentication providers | `auth` of `[dataserviceConfig]` | none: required when `auth` is `true`, and not declared otherwise |
 | Other listener settings, such as TLS and timeouts | `listenerConfig` of `[dataserviceConfig]` | `ballerina/http`'s defaults |
+| CORS | `cors` of `[dataserviceConfig.serviceConfig]` | no cross-origin requests |
+| Authentication providers | `auth` of `[dataserviceConfig.serviceConfig]` | none: required when `auth` is `true`, and not declared otherwise |
 
-`dataservice_config.bal` declares the record #1503 gives, with HTTP's fields added:
+`dataservice_config.bal` declares the record #1503 gives, with HTTP's fields added. The
+listener settings go in `listenerConfig`, and the settings of `@http:ServiceConfig` that vary
+by environment go in `serviceConfig`:
 
 ```ballerina
-type DataserviceConfig record {|
-    int port = 9090;
-    http:ListenerConfiguration listenerConfig = {};
-    int pageSize = 100;
-    int maxPageSize = 1000;
+type DataserviceServiceConfig record {|
+    http:CorsConfig cors = {};
     // Only with options.dataservice.auth = true
     http:ListenerAuthConfig[] auth;
 |};
 
-// `= ?` with options.dataservice.auth = true, because `auth` has no default
+type DataserviceConfig record {|
+    int port = 9090;
+    http:ListenerConfiguration listenerConfig = {};
+    // No default with options.dataservice.auth = true, because `auth` has none
+    DataserviceServiceConfig serviceConfig = {};
+    int pageSize = 100;
+    int maxPageSize = 1000;
+|};
+
+// `= ?` with options.dataservice.auth = true
 configurable DataserviceConfig dataserviceConfig = {};
 
 final dataservice:PageConfig dataservicePageConfig =
         check dataservice:pageConfig(dataserviceConfig.pageSize, dataserviceConfig.maxPageSize);
 // Only with options.dataservice.auth = true
 final http:ListenerAuthConfig[] dataserviceAuthConfig =
-        check dsHttp:authConfig(dataserviceConfig.auth);
+        check dsHttp:authConfig(dataserviceConfig.serviceConfig.auth);
 ```
 
-The field is `listenerConfig`, not `listener`, because `listener` is a keyword. The program
-stops at startup, with the messages #1503 gives, when a page size is out of range or a field
-is unknown.
+The fields are `listenerConfig` and `serviceConfig`, not `listener` and `service`, because
+those are keywords. Other settings of `@http:ServiceConfig`, such as `validation` and
+`laxDataBinding`, change what the API accepts, so they are not configurable. The program stops
+at startup, with the messages #1503 gives, when a page size is out of range or a field is
+unknown.
+
+For example, to allow a browser application on another origin:
+
+```toml
+[dataserviceConfig.serviceConfig.cors]
+allowOrigins = ["https://app.example.com"]
+allowMethods = ["GET", "POST", "PATCH", "DELETE"]
+```
 
 For example, to serve over TLS:
 
@@ -720,8 +743,9 @@ public type EmployeeListCreated record {|
   create above `dataserviceConfig.maxPageSize` records.
 - Keys: a `Location` round trip for a `float` key, and `400` for a `NaN` or `Infinity` key.
 - Startup: an out-of-range page size, an unknown field of `[dataserviceConfig]`, and with
-  `auth = true`, a missing or empty `dataserviceConfig.auth`, each stopping the program with
-  its message.
+  `auth = true`, a missing or empty `dataserviceConfig.serviceConfig.auth`, each stopping the
+  program with its message.
+- CORS: a preflight and a cross-origin request with and without `cors` set.
 - The OpenAPI definition: the `Link` header, the definition with the generated summaries and
   the model's descriptions, Swagger UI, and none of them with `introspection = false`.
 - Field rules: per rule, the wire types generated, a `ReadOnly` field ignored on create and
