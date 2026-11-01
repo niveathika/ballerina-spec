@@ -552,15 +552,16 @@ A relation's foreign key fields are fields of these types, whether the model dec
 Get many and create many return an envelope rather than a bare array:
 
 ```ballerina
-public type EmployeeList record {|
+public type EmployeeList record {
     Employee[] items;
     boolean hasMore;
-|};
+};
 ```
 
 `hasMore` is `true` when records exist after this page; see [Query options](#query-options).
-Create many sets it to `false`. The envelope also leaves room for a total later, without
-changing the result type. MCP also requires a tool's structured result to be an object, so a
+Create many sets it to `false`. The envelope is an open record, so a field added to it later,
+such as a total, does not break a client; see
+[Compatibility of the generated API](#compatibility-of-the-generated-api). MCP also requires a tool's structured result to be an object, so a
 bare array cannot be used there in any case.
 
 The service generates these types per exposed entity, each where an operation uses it:
@@ -569,9 +570,9 @@ The service generates these types per exposed entity, each where an operation us
 |---|---|
 | `<Entity>List` | A page of `<Entity>` records, as above |
 | `<Entity>Partial` | A record narrowed by `fields`; see [Fields](#fields) |
-| `<Entity>PartialList` | A page of `<Entity>Partial` records |
+| `<Entity>PartialList` | A page of `<Entity>Partial` records, as an open record |
 | `<Entity>RelatedPartial` | A related record in `fields`: the entity's own fields and no relation fields |
-| `<Entity>RelatedPartialList` | A to-many relation in `fields`: `<Entity>RelatedPartial` records and `hasMore` |
+| `<Entity>RelatedPartialList` | A to-many relation in `fields`: `<Entity>RelatedPartial` records and `hasMore`, as an open record |
 | `<Entity>Filter` | The `filter` option |
 | `<Entity>Payload`, `<Entity>InsertPayload`, `<Entity>UpdatePayload` | The wire types of `<Entity>`, `<Entity>Insert` and `<Entity>Update`, where a protocol needs them |
 | `<Entity>Created`, `<Entity>ListCreated` | The protocol's result of create one and create many, where the protocol needs one |
@@ -943,11 +944,16 @@ public enum ErrorCode {
     INTERNAL
 }
 
-public type DataserviceError record {|
-    ErrorCode code;
+public type DataserviceError record {
+    # An `ErrorCode` value
+    string code;
     string message;
-|};
+};
 ```
+
+The body is an open record and `code` is a string, so a code or a field added later, such as
+the field that failed, does not break a client. `ErrorCode` lists the codes this version
+defines.
 
 Each protocol proposal maps the categories to its own form: an HTTP status code, an entry in
 the GraphQL `errors` array, or an MCP tool result with `isError` set.
@@ -1176,13 +1182,31 @@ The generated API follows the model, so a change to the model can break callers:
 | Breaks callers | Does not break callers |
 |---|---|
 | Renaming or removing an entity or a field | Adding an entity |
-| Adding a required field without a default | Adding an optional field |
-| Changing the type of a field or a key | Adding an action |
+| Adding a required field without a default | Adding an action |
+| Adding a field that is returned, for a client that rejects unknown fields | Adding a field that is returned, for a client that ignores unknown fields |
+| Changing the type of a field or a key | Adding an optional field that is not returned, such as an `Internal` one |
 | Removing an action | |
+
+An entity's types are closed records, so the protocol's definition says that a record holds
+no other field, and a client generated from it may reject one. ✅ On Ballerina 2201.14.0, an
+`http:Client` reading a response into a closed record failed with
+`Payload binding failed: undefined field 'extra'`. Adding a field to an entity is therefore a
+breaking change for such clients.
+
+The types that the libraries own are open, so the libraries can add to them in a minor
+version without breaking any client:
+
+| Type | Added later, for example |
+|---|---|
+| `<Entity>List`, `<Entity>PartialList`, `<Entity>RelatedPartialList` | A total count |
+| `DataserviceError` | A code, such as one for a failed precondition, and a field, such as the field that failed |
+
+Clients must ignore unknown fields in these types, and treat an unknown `code` by its category
+in the protocol, such as the HTTP status.
 
 A breaking change can be published beside the old API by generating it with a new `basePath`,
 such as `/api/v2`. Regenerating with a newer persist-tools keeps the wire contract unchanged
-within a major version of the libraries.
+within a major version of the libraries, apart from these additions.
 
 ### Backward compatibility
 
