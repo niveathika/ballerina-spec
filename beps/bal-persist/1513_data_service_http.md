@@ -51,12 +51,17 @@ final Client dataserviceClient = check new ();
 listener http:Listener dataserviceListener =
         new (dataserviceConfig.port, dataserviceConfig.listenerConfig);
 
-service /api on dataserviceListener {
+service http:InterceptableService /api on dataserviceListener {
+
+    public function createInterceptors() returns dsHttp:ErrorInterceptor => new;
+
     // one group of resources per exposed entity
 }
 ```
 
 - **Base path:** the service's base path is `options.dataservice.basePath`, `/api` by default.
+- **Error interceptor:** `dsHttp:ErrorInterceptor` gives the errors that `ballerina/http`
+  raises before a resource runs the `DataserviceError` body; see [Errors](#errors).
 
 ### Operations
 
@@ -199,7 +204,7 @@ The field rules of #1503 shape the wire types:
 
 - **Rejected fields:** the wire types are closed records, so a request that sets a field its
   wire type does not hold, an `Internal` field or an `Immutable` field on patch, is answered by
-  `ballerina/http` with `400` and its default body.
+  `ballerina/http` with `400` and `INVALID_INPUT`.
 - **Values on create:** `transformPayloadTo<Entity>Insert` sets a `ReadOnly` or `Internal`
   field to the `value` of its annotation, or to `()`.
 - **Other types:** an `Internal` field is also left out of `<Entity>Filter`, `<Entity>Partial`
@@ -364,10 +369,12 @@ from `ballerina/dataservice`, with the code and message #1503 defines for the ca
 | Conflict | `409` | `CONFLICT` | `persist:AlreadyExistsError` ✅ |
 | Constraint violation | `409` | `CONSTRAINT_VIOLATION` | `persist:ConstraintViolationError` |
 | Invalid input | `400` | `INVALID_INPUT` | a date, time or `byte[]` value that does not parse; a constraint broken on a field of a wire type; an unusable `sort` or `fields` name, a field named twice in `sort`, an empty `fields`, `size` below 1, `offset` below 0 or too large for the `size`; a create above `dataserviceConfig.maxPageSize` records; a `float` key that is not finite |
-| Invalid input | `400` | — | `ballerina/http` payload or path binding ✅; a constraint broken on an entity without wire types |
+| Invalid input | `400` | `INVALID_INPUT` | `ballerina/http` payload, path or query binding ✅; a constraint broken on an entity without wire types |
+| Invalid input | `405`, or another `4xx` status of `ballerina/http` | `INVALID_INPUT` | a method that the path has no resource for ✅, an unsupported media type, a body too large |
+| Not found | `404` | `NOT_FOUND` | a path that matches no resource ✅ |
 | Internal | `500` | `INTERNAL` | any other error |
-| Unauthenticated | `401` | — | `ballerina/http` auth, before the resource runs ✅ |
-| Missing scope | `403` | — | `ballerina/http` auth, before the resource runs ✅ |
+| Unauthenticated | `401` | `UNAUTHENTICATED` | `ballerina/http` auth, before the resource runs ✅ |
+| Forbidden | `403` | `FORBIDDEN` | `ballerina/http` auth, when the caller holds no scope of the action, before the resource runs ✅ |
 | Forbidden | `403` | `FORBIDDEN` | get related or a relation in `fields`, when `auth` is `true` and the caller holds no `read` scope of the related entity; declared only on the resources that check it, see [Generated resources](#generated-resources) |
 
 The status code records are not specific to an entity, so they are defined in
@@ -390,10 +397,15 @@ The message for a value that does not parse is
 `The field '<field>' of the entity '<Entity>' is not <format>.`, where `<format>` is
 `an ISO 8601 date`, `an ISO 8601 time`, `an ISO 8601 date-time` or `a base64 string`.
 
-Other invalid input is answered by `ballerina/http` before the resource runs, so its body is
-the module's default error body, not `DataserviceError`. For a request body, it names every
-missing or mistyped field. ✅ For `filter`, it does not; see
-[Risks and assumptions](#risks-and-assumptions).
+Other errors are raised by `ballerina/http` before the resource runs. The service is an
+`http:InterceptableService` whose `dsHttp:ErrorInterceptor`, a `ResponseErrorInterceptor`,
+answers each of them with the same status and a `DataserviceError` body: the code in the
+table above, and `ballerina/http`'s message, or for `401` and `403` the messages #1503 gives.
+For a request body, the message names every missing or mistyped field. ✅ For `filter`, it does
+not; see [Risks and assumptions](#risks-and-assumptions). ✅ On Ballerina 2201.14.0, a
+`ResponseErrorInterceptor` returned by `createInterceptors` received the `400` of payload, path
+and query binding, the `401` and `403` of declarative auth, and the `404` and `405` of
+dispatching, each with its status code on the response.
 
 Example responses: ✅
 
@@ -401,8 +413,8 @@ Example responses: ✅
 POST /api/employees  {"id":1, ...}            → 201  Location: /api/employees/1
 POST /api/employees  {"id":1, ...} (again)    → 409  {"code":"CONFLICT", "message":"A record that conflicts with an existing record of the entity 'Employee' already exists."}
 GET  /api/employees/99                        → 404  {"code":"NOT_FOUND", "message":"A record with the key '99' does not exist for the entity 'Employee'."}
-GET  /api/employees/abc                       → 400  (ballerina/http default body)
-PUT  /api/employees/2                         → 405
+GET  /api/employees/abc                       → 400  {"code":"INVALID_INPUT", "message":"error in casting path parameter : 'id'"}
+PUT  /api/employees/2                         → 405  {"code":"INVALID_INPUT", "message":"Method not allowed"}
 ```
 
 ### Auth
@@ -434,11 +446,11 @@ service /api on dataserviceListener {
 - **Authentication only:** an action with an empty scope list gets no `@http:ResourceConfig`
   auth, so the service's providers apply alone.
 - **Responses:** `ballerina/http` answers a missing or invalid credential with `401` and a
-  missing scope with `403`, with its default body, before the resource runs. ✅ On Ballerina
-  2201.14.0, with `http:ListenerAuthConfig[]` read from `Config.toml` as basic auth with a file
-  user store, a request without credentials was answered with `401`, a user without the scope
-  with `403`, and a user with the scope with `200`; the `401` body was `ballerina/http`'s
-  default error body.
+  missing scope with `403` before the resource runs, and `dsHttp:ErrorInterceptor` gives them
+  the codes `UNAUTHENTICATED` and `FORBIDDEN`. ✅ On Ballerina 2201.14.0, with
+  `http:ListenerAuthConfig[]` read from `Config.toml` as basic auth with a file user store, a
+  request without credentials was answered with `401`, a user without the scope with `403`,
+  and a user with the scope with `200`.
 - **Get related** and a relation in `fields` require the entity's `read` scopes through
   `@http:ResourceConfig`. For a relation whose related entity's `read` scopes the entity's do
   not cover, as #1503 defines, the resource takes the `http:Request` and calls
@@ -486,7 +498,7 @@ url = "https://idp.example.com/jwks"
 ### Constraints
 
 The constraints of the model, kept in the generated types, are checked by `ballerina/http`'s
-payload validation, which answers a value that breaks one with `400` and its default body.
+payload validation, which answers a value that breaks one with `400` and `INVALID_INPUT`.
 Wire types copy the model's constraint annotations. A wire type holds dates, times and `byte[]`
 values as strings, so the service checks the constraints on those fields on the converted
 record, and answers a failure with `400`, `INVALID_INPUT` and the message #1503 gives,
@@ -740,20 +752,19 @@ public type EmployeeListCreated record {|
   `true`, and not published with `introspection = false`.
 - Constraints: a create and a patch that break a constraint, on an entity with and without wire
   types.
+- Error bodies: a `DataserviceError` body with its code for each error that `ballerina/http`
+  raises: payload, path and query binding, `401`, `403`, a path with no resource, and `405`.
 
 ## Risks and assumptions
 
-- **Two error body shapes for `400`.** Malformed or mistyped input, and a constraint broken on
-  an entity without wire types, are rejected by `ballerina/http`'s payload validation with its
-  default body. A constraint broken on a field of a wire type, and the other errors, use
-  `DataserviceError`. For `filter`, the default body says only
-  `error in casting query param : 'filter'`, without naming the field or operator. ✅ An error
-  interceptor on the generated service, which is future work, aligns the two shapes.
+- **Binding messages come from `ballerina/http`.** The message of an error raised before the
+  resource runs is `ballerina/http`'s. For `filter`, it says only
+  `error in casting query param : 'filter'`, without naming the field or operator. ✅
 - **The definition is public until [ballerina-library#9432](https://github.com/ballerina-platform/ballerina-library/issues/9432) is fixed.** With `auth = true`, a
   service that must not publish its definition before then sets `introspection = false`.
 - **`401` and `403` are not in the OpenAPI definition.** They come from `ballerina/http` auth
   and are not in the resources' return types, so the definition does not list them.
-- **A second credential check for uncovered relations.** `dsHttp:authorizeRelation` checks the
+- **A second credential check.** `dsHttp:authorizeRelation` checks the
   credential again after `ballerina/http` has: a JWT signature is verified again unless the
   provider's cache is configured, an OAuth2 token is introspected again unless its cache is
   configured, and an LDAP user is looked up again. Only relations, and patch and delete, whose
@@ -771,8 +782,3 @@ public type EmployeeListCreated record {|
   resources ([ballerina-library#9432](https://github.com/ballerina-platform/ballerina-library/issues/9432))
 - `ballerina/dataservice`
 - `ballerina/dataservice.http`: a new library, released separately from `ballerina/dataservice`
-
-## Future work
-
-- An error interceptor so invalid-input errors use `DataserviceError`.
-
