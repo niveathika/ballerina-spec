@@ -295,7 +295,7 @@ A data service uses two library packages:
 
 | Package | Holds | Depends on | Imported by |
 |---|---|---|---|
-| `ballerina/dataservice` | The annotations and the compiler plugin that validates them. The protocol-neutral runtime: the query options and the SQL they build, the error body and codes, the mapping from persist errors to them, and value conversions every protocol shares | `ballerina/persist` and `ballerina/sql` | The model and the generated service |
+| `ballerina/dataservice` | The annotations and the compiler plugin that validates them. The protocol-neutral runtime: the query options and the SQL they build, the error body and codes, the mapping from persist errors to them, value conversions every protocol shares, and the runtime settings every protocol has | `ballerina/persist` and `ballerina/sql` | The model and the generated service |
 | `ballerina/dataservice.<protocol>`, such as `ballerina/dataservice.http` | The protocol runtime, defined by each protocol proposal | `ballerina/dataservice` and the protocol module | The generated service |
 
 Each protocol package is a separate package with its own release cycle, as persist's datastore
@@ -1107,14 +1107,22 @@ the user sets them in `Config.toml`. The data service does the same: the tool ge
 `dataservice_config.bal`, which declares one configurable record, `dataserviceConfig`, holding
 the listener and paging settings.
 
+The record's type comes from the libraries, not from generated code. `ballerina/dataservice`
+defines the fields every protocol has, and each protocol library defines its configuration type
+by including them and adding its own fields:
+
 ```ballerina
-type DataserviceConfig record {|
+// ballerina/dataservice
+public type Config record {|
     int port = 9090;
     int pageSize = 100;
     int maxPageSize = 1000;
 |};
+```
 
-configurable DataserviceConfig dataserviceConfig = {};
+```ballerina
+// dataservice_config.bal, for HTTP
+configurable dsHttp:Config dataserviceConfig = {};
 
 final dataservice:PageConfig dataservicePageConfig =
         check dataservice:pageConfig(dataserviceConfig.pageSize, dataserviceConfig.maxPageSize);
@@ -1136,13 +1144,16 @@ pageSize = 50
 - **Misspelled names:** the record is closed, so an unknown field, such as `pagesize`, stops the
   program at startup.
 - **Per protocol:** every protocol uses these field names. The values shown are the HTTP
-  defaults; each protocol proposal sets its own, because a good page size differs by protocol:
-  an agent reading MCP results needs smaller pages than an HTTP client. A protocol proposal
-  adds its own fields, such as listener and auth settings.
+  defaults; a protocol library's type can give its own, because a good page size differs by
+  protocol: an agent reading MCP results needs smaller pages than an HTTP client. It adds its
+  own fields, such as listener and auth settings.
+- **Library types:** a setting added to a library type, in a minor version, is available
+  without regenerating, and a generated name cannot clash with the user's types.
 
-✅ On Ballerina 2201.14.0, a field left out of `[dataserviceConfig]` kept its default, and an
+✅ On Ballerina 2201.14.0, a field left out of `[dataserviceConfig]` kept its default, an
 unknown field stopped the program with
-`undefined field 'pagesize' provided for closed record`.
+`undefined field 'pagesize' provided for closed record`, and a record type that includes
+`Config` and gives `pageSize` another default used that default.
 
 The values are checked at startup by the module-level `check` on `dataservice:pageConfig`. The
 service does not start, and the program stops with a message, when a value is out of range:
@@ -1414,6 +1425,12 @@ configurable value of a simple type. One value, such as the port, can then be ov
 are scattered as top-level keys, each needing the `dataservice` prefix to avoid the database
 configuration's names, and a protocol's listener and auth settings add more such keys. A
 record groups them under one table and catches a misspelled field.
+
+### A generated configuration type
+
+The tool could generate the record type into `dataservice_config.bal`. It is not adopted
+because the generated name would share the user's namespace, a new setting would need
+regeneration, and every protocol would generate the same paging fields.
 
 ## Testing
 
