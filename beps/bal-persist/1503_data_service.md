@@ -994,7 +994,7 @@ generated only when `options.dataservice.auth` is `true`:
 
 - **Without auth:** with `auth = false`, the default, no auth code is generated and every
   caller can perform every enabled action. A model that sets `scopes` gets a build warning.
-- **Providers:** with `auth = true`, the protocol proposal adds a required field to
+- **Providers:** with `auth = true`, the protocol proposal adds a required field under
   `dataserviceConfig` for the authentication providers, such as JWT validation, set in
   `Config.toml`. It has no default, so the service does not start when `Config.toml` does not
   set it, and an empty list also stops it at startup.
