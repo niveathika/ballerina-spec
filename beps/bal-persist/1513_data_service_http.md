@@ -538,10 +538,10 @@ the service and its doc comments, and `ballerina/http` serves it with Swagger UI
   ([ballerina-library#9432](https://github.com/ballerina-platform/ballerina-library/issues/9432)): on Ballerina 2201.14.0, with basic auth configured from
   `Config.toml`, the definition, Swagger UI and the `OPTIONS` `Link` header were answered with
   `200` without credentials. ✅
-- **Open and closed schemas:** an entity's types are closed, so their schemas carry
-  `additionalProperties: false`. The list envelopes and `DataserviceError` are open, as #1503
-  defines, so theirs do not, and `code` is a string. ✅ On Ballerina 2201.14.0, an open record
-  in a resource's return type was exported without `additionalProperties: false`.
+- **Open and closed schemas:** an entity's types and `DataserviceError` are closed, so their
+  schemas carry `additionalProperties: false`. The list envelopes are open, as #1503 defines,
+  so theirs do not. ✅ On Ballerina 2201.14.0, an open record in a resource's return type was
+  exported without `additionalProperties: false`.
 - **Swagger UI with a token:** a browser sends no bearer token when Swagger UI loads the
   definition, so with JWT or OAuth2 the page cannot load it unless the browser adds the token.
   The definition stays available to clients and tools that send one.
