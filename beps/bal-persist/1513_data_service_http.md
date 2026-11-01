@@ -3,7 +3,7 @@
 - Author: @niveathika
 - Reviewers: 
 - Created: 2026-10-07
-- Updated: 2026-10-26
+- Updated: 2026-11-01
 - Issue: [#1513](https://github.com/ballerina-platform/ballerina-spec/issues/1513)
 - Status: Draft
 
@@ -14,7 +14,7 @@ This proposal defines how the protocol-neutral CRUD shape in
 is rendered as an `http:Service` when `options.dataservice.protocol = "http"`.
 
 Each exposed entity becomes a collection resource and a key resource under the base path, with
-a resource per relation under the key. The seven operations map to `GET`, `POST`, `PATCH` and
+a resource per relation under the key. The operations map to `GET`, `POST`, `PATCH` and
 `DELETE`, the query options map to query parameters, results are JSON, and the error categories
 map to status codes.
 
@@ -122,6 +122,8 @@ request for it on its own:
 - **Key text:** in `Location` and in error messages, a key value is written with Ballerina's
   `toString`, so `1.5` stays `1.5` and a `decimal` keeps its scale. In `Location`, each value
   is then percent-encoded as a path segment.
+- **Reserved names:** path segments starting with `$`, such as `$count`, are reserved for later
+  query and metadata operations, and are not used for anything else.
 
 ### Types and JSON
 
@@ -337,15 +339,18 @@ GET /api/departments/2?fields=name,employees.name
 
 ```ballerina
 resource function get employees/[int id]/department(http:Request request, string[]? fields = ())
-        returns Department|DepartmentPartial|dsHttp:NotFound|dsHttp:InvalidInput|dsHttp:Forbidden
-            |dsHttp:InternalError { ... }
+        returns Department|DepartmentRelatedPartial|dsHttp:NotFound|dsHttp:InvalidInput
+            |dsHttp:Forbidden|dsHttp:InternalError { ... }
 
 resource function get departments/[int id]/employees(http:Request request,
         EmployeeFilter? filter = (), string[]? sort = (), int? size = (), int? offset = (),
         string[]? fields = ())
-        returns EmployeeList|EmployeePartialList|dsHttp:NotFound|dsHttp:InvalidInput
+        returns EmployeeList|EmployeeRelatedPartialList|dsHttp:NotFound|dsHttp:InvalidInput
             |dsHttp:Forbidden|dsHttp:InternalError { ... }
 ```
+
+With `fields`, get related returns `<Target>RelatedPartial` or `<Target>RelatedPartialList`,
+because `fields` on get related names only the related entity's own fields.
 
 ### Errors
 
