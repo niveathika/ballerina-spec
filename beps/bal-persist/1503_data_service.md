@@ -928,7 +928,9 @@ persist client is called, with `INVALID_INPUT` unless the row says otherwise:
 #### Errors
 
 Errors fall into protocol-neutral categories. `ballerina/dataservice` defines one error body
-and an error code per category:
+and an error code per category, and every error the service answers uses that body, including
+the errors the protocol module raises before the operation runs, such as auth and binding
+errors:
 
 ```ballerina
 public enum ErrorCode {
@@ -936,6 +938,7 @@ public enum ErrorCode {
     CONFLICT,
     CONSTRAINT_VIOLATION,
     INVALID_INPUT,
+    UNAUTHENTICATED,
     FORBIDDEN,
     INTERNAL
 }
@@ -955,7 +958,8 @@ the GraphQL `errors` array, or an MCP tool result with `isError` set.
 | Conflict | `CONFLICT` | A record with the key or a unique value already exists | `persist:AlreadyExistsError` |
 | Constraint violation | `CONSTRAINT_VIOLATION` | A write violates a foreign key | `persist:ConstraintViolationError` |
 | Invalid input | `INVALID_INPUT` | The input cannot be bound to the operation's type, a value is not in its format, or a value breaks a constraint of the model | The protocol module's binding or validation error, or a `ballerina/dataservice` check or conversion |
-| Forbidden | `FORBIDDEN` | Get related or a relation in `fields`, when the caller holds no `read` scope of the related entity; see [Auth](#auth) | The protocol module's relation check |
+| Unauthenticated | `UNAUTHENTICATED` | With `auth = true`, the caller has no credential, or one that no provider accepts | The protocol module's auth |
+| Forbidden | `FORBIDDEN` | With `auth = true`, the caller holds no scope of the operation's action, or, for get related or a relation in `fields`, no `read` scope of the related entity; see [Auth](#auth) | The protocol module's auth, or its relation check |
 | Internal | `INTERNAL` | Any other failure | `persist:Error` and others |
 
 The message is written by `ballerina/dataservice`, not taken from the persist error, because the
@@ -967,7 +971,10 @@ SQL datastores put driver text, such as table and constraint names, in their err
 | Conflict | `A record that conflicts with an existing record of the entity '<Entity>' already exists.` |
 | Constraint violation | `The operation violates a constraint of the entity '<Entity>'.` |
 | Invalid input, a constraint broken on a field of a wire type | `The field '<field>' of the entity '<Entity>' breaks its '<constraint>' constraint.` |
-| Forbidden | `The relation '<relation>' of the entity '<Entity>' needs a 'read' scope of the entity '<Target>'.` |
+| Invalid input, raised by the protocol module's binding or validation | The protocol module's message |
+| Unauthenticated | `The request needs a valid credential.` |
+| Forbidden, a scope of the action | `The caller holds no scope that the operation needs.` |
+| Forbidden, a relation | `The relation '<relation>' of the entity '<Entity>' needs a 'read' scope of the entity '<Target>'.` |
 | Internal | `An internal error occurred.` |
 
 A composite key is written as its values joined by `/`, in key order.
