@@ -424,7 +424,7 @@ PUT  /api/employees/2                         → 405  {"code":"INVALID_INPUT", 
 ### Auth
 
 With `options.dataservice.auth = false`, the default, the service has no auth annotations and
-`DataserviceServiceConfig` has no `auth` field.
+`dataserviceConfig` is a `dsHttp:Config`, whose `serviceConfig` has no `auth` field.
 
 With `auth = true`, the service passes `dataserviceAuthConfig`, the checked value of
 `dataserviceConfig.serviceConfig.auth` from [Configuration](#configuration), to
@@ -440,12 +440,12 @@ service http:InterceptableService /api on dataserviceListener {
 }
 ```
 
-- **Required providers:** `auth` is a required field of `dataserviceConfig.serviceConfig`
-  without a default, so the program does not start when `Config.toml` does not set it. ✅ On
-  Ballerina 2201.14.0, it stopped with `value not provided for non-defaultable required field
-  'auth' of record '<module>:DataserviceServiceConfig' in configurable variable
-  'dataserviceConfig.serviceConfig'`. An empty list also stops it at startup, through a
-  module-level `check` on `dsHttp:authConfig`, with the message
+- **Required providers:** with `auth = true`, `dataserviceConfig` is a `dsHttp:AuthConfig`,
+  whose `serviceConfig.auth` is required without a default, so the program does not start when
+  `Config.toml` does not set it. ✅ On Ballerina 2201.14.0, it stopped with `value not provided
+  for non-defaultable required field 'auth' of record '<module>:AuthServiceConfig' in
+  configurable variable 'dataserviceConfig.serviceConfig'`. An empty list also stops it at
+  startup, through a module-level `check` on `dsHttp:authProviders`, with the message
   `The configurable value 'dataserviceConfig.serviceConfig.auth' must hold at least one authentication provider.`
 - **Authentication only:** an action with an empty scope list gets no `@http:ResourceConfig`
   auth, so the service's providers apply alone.
@@ -472,7 +472,7 @@ service http:InterceptableService /api on dataserviceListener {
   `ballerina/http` validates a credential and checks its scopes before the resource runs, but
   does not pass the result to the resource, and its `scopes` accept a caller holding any one of
   them, so they cannot require the scopes of two entities. `dsHttp` therefore creates, once,
-  the listener auth handler of each provider in `dsHttp:authConfig`: `http:ListenerJwtAuthHandler`,
+  the listener auth handler of each provider in `dsHttp:authProviders`: `http:ListenerJwtAuthHandler`,
   `http:ListenerFileUserStoreBasicAuthHandler`, `http:ListenerLdapUserStoreBasicAuthHandler` or
   `http:ListenerOAuth2Handler`. It tries them in the order of the list, as `ballerina/http`
   does, and the first that authenticates the credential decides with its `authorize`. A
@@ -553,41 +553,59 @@ the service and its doc comments, and `ballerina/http` serves it with Swagger UI
 | CORS | `cors` of `[dataserviceConfig.serviceConfig]` | no cross-origin requests |
 | Authentication providers | `auth` of `[dataserviceConfig.serviceConfig]` | none: required when `auth` is `true`, and not declared otherwise |
 
-`dataservice_config.bal` declares the record #1503 gives, with HTTP's fields added. The
-listener settings go in `listenerConfig`, and the settings of `@http:ServiceConfig` that vary
-by environment go in `serviceConfig`:
+`ballerina/dataservice.http` defines the configuration types. Each includes
+`dataservice:Config` from #1503 and adds HTTP's fields: the listener settings in
+`listenerConfig`, and the settings of `@http:ServiceConfig` that vary by environment in
+`serviceConfig`. The types with auth differ only in a required `auth`:
 
 ```ballerina
-type DataserviceServiceConfig record {|
+public type ServiceConfig record {|
     http:CorsConfig cors = {};
-    // Only with options.dataservice.auth = true
+|};
+
+public type AuthServiceConfig record {|
+    *ServiceConfig;
     http:ListenerAuthConfig[] auth;
 |};
 
-type DataserviceConfig record {|
-    int port = 9090;
+public type Config record {|
+    *dataservice:Config;
     http:ListenerConfiguration listenerConfig = {};
-    // No default with options.dataservice.auth = true, because `auth` has none
-    DataserviceServiceConfig serviceConfig = {};
-    int pageSize = 100;
-    int maxPageSize = 1000;
+    ServiceConfig serviceConfig = {};
 |};
 
-// `= ?` with options.dataservice.auth = true
-configurable DataserviceConfig dataserviceConfig = {};
+public type AuthConfig record {|
+    *dataservice:Config;
+    http:ListenerConfiguration listenerConfig = {};
+    AuthServiceConfig serviceConfig;
+|};
+```
+
+`dataservice_config.bal` declares only the configurable value and the checked values:
+
+```ballerina
+configurable dsHttp:Config dataserviceConfig = {};
+// With options.dataservice.auth = true:
+// configurable dsHttp:AuthConfig dataserviceConfig = ?;
 
 final dataservice:PageConfig dataservicePageConfig =
         check dataservice:pageConfig(dataserviceConfig.pageSize, dataserviceConfig.maxPageSize);
 // Only with options.dataservice.auth = true
 final http:ListenerAuthConfig[] dataserviceAuthConfig =
-        check dsHttp:authConfig(dataserviceConfig.serviceConfig.auth);
+        check dsHttp:authProviders(dataserviceConfig.serviceConfig.auth);
 ```
 
-The fields are `listenerConfig` and `serviceConfig`, not `listener` and `service`, because
-those are keywords. Other settings of `@http:ServiceConfig`, such as `validation` and
-`laxDataBinding`, change what the API accepts, so they are not configurable. The program stops
-at startup, with the messages #1503 gives, when a page size is out of range or a field is
-unknown.
+- **Two types for auth:** `AuthConfig` does not include `Config`, because a closed
+  `AuthServiceConfig` is not a subtype of `ServiceConfig`, so it cannot override that field.
+  ✅ On Ballerina 2201.14.0, with `Config`, an `auth` entry in `Config.toml` stopped the program
+  with `undefined field 'auth' provided for closed record`, and with `AuthConfig`, a missing
+  one stopped it with the message above.
+- **Field names:** `listenerConfig` and `serviceConfig`, not `listener` and `service`, because
+  those are keywords.
+- **Not configurable:** other settings of `@http:ServiceConfig`, such as `validation` and
+  `laxDataBinding`, change what the API accepts, so they are not in `ServiceConfig`.
+- **Startup:** the program stops, with the messages #1503 gives, when a page size is out of
+  range or a field is unknown.
 
 For example, to allow a browser application on another origin:
 
