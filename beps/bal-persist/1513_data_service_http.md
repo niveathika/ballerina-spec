@@ -350,13 +350,13 @@ GET /api/departments/2?fields=name,employees.name
 ```ballerina
 resource function get employees/[int id]/department(http:Request request, string[]? fields = ())
         returns Department|DepartmentRelatedPartial|dsHttp:NotFound|dsHttp:InvalidInput
-            |dsHttp:Forbidden|dsHttp:InternalError { ... }
+            |dsHttp:Unauthorized|dsHttp:Forbidden|dsHttp:InternalError { ... }
 
 resource function get departments/[int id]/employees(http:Request request,
         EmployeeFilter? filter = (), string[]? sort = (), int? size = (), int? offset = (),
         string[]? fields = ())
         returns EmployeeList|EmployeeRelatedPartialList|dsHttp:NotFound|dsHttp:InvalidInput
-            |dsHttp:Forbidden|dsHttp:InternalError { ... }
+            |dsHttp:Unauthorized|dsHttp:Forbidden|dsHttp:InternalError { ... }
 ```
 
 With `fields`, get related returns `<Target>RelatedPartial` or `<Target>RelatedPartialList`,
@@ -379,7 +379,7 @@ from `ballerina/dataservice`, with the code and message #1503 defines for the ca
 | Internal | `500` | `INTERNAL` | any other error |
 | Unauthenticated | `401` | `UNAUTHENTICATED` | `ballerina/http` auth, before the resource runs ✅ |
 | Forbidden | `403` | `FORBIDDEN` | `ballerina/http` auth, when the caller holds no scope of the action, before the resource runs ✅ |
-| Forbidden | `403` | `FORBIDDEN` | get related or a relation in `fields`, when `auth` is `true` and the caller holds no `read` scope of the related entity; declared only on the resources that check it, see [Generated resources](#generated-resources) |
+| Forbidden | `403` | `FORBIDDEN` | get related or a relation in `fields`, when `auth` is `true` and the caller holds no `read` scope of the related entity |
 
 The status code records are not specific to an entity, so they are defined in
 `ballerina/dataservice.http`, which keeps `ballerina/dataservice` free of `ballerina/http`:
@@ -391,8 +391,8 @@ public type NotFound record {|
 |};
 ```
 
-`InvalidInput`, `Conflict`, `ConstraintViolation`, `Forbidden` and `InternalError` follow the
-same form.
+`InvalidInput`, `Conflict`, `ConstraintViolation`, `Unauthorized`, `Forbidden` and
+`InternalError` follow the same form.
 
 An error whose category is not among the error records of its resource is answered with `500`
 and `INTERNAL`, and logged.
@@ -410,6 +410,13 @@ not; see [Risks and assumptions](#risks-and-assumptions). ✅ On Ballerina 2201.
 `ResponseErrorInterceptor` returned by `createInterceptors` received the `400` of payload, path
 and query binding, the `401` and `403` of declarative auth, and the `404` and `405` of
 dispatching, each with its status code on the response.
+
+The OpenAPI definition lists what each resource declares, so the resources declare the errors
+the interceptor answers for them as well; see [Generated resources](#generated-resources). ✅ On
+Ballerina 2201.14.0, an `http:InterceptableService` with a `ResponseErrorInterceptor` exported
+a resource's `400` with only its declared body, while a plain service also listed
+`ballerina/http`'s default `ErrorPayload`; `401` and `403` records declared in a resource's
+return type were exported with their body, and undeclared ones were not listed.
 
 Example responses: ✅
 
@@ -628,34 +635,37 @@ keyFile = "/path/to/private.key"
 #### Generated resources
 
 ```ballerina
-service /api on dataserviceListener {
+service http:InterceptableService /api on dataserviceListener {
 
     resource function get employees(http:Request request, EmployeeFilter? filter = (),
             string[]? sort = (), int? size = (), int? offset = (), string[]? fields = ())
-            returns EmployeeList|EmployeePartialList|dsHttp:InvalidInput|dsHttp:Forbidden
-                |dsHttp:InternalError {
+            returns EmployeeList|EmployeePartialList|dsHttp:InvalidInput|dsHttp:Unauthorized
+                |dsHttp:Forbidden|dsHttp:InternalError {
         // Validates the options and builds the query with ballerina/dataservice, reads one page
         // through the persist client, and returns it with hasMore.
     }
 
     resource function get employees/[int id](http:Request request, string[]? fields = ())
-            returns Employee|EmployeePartial|dsHttp:NotFound|dsHttp:InvalidInput|dsHttp:Forbidden
-                |dsHttp:InternalError { ... }
+            returns Employee|EmployeePartial|dsHttp:NotFound|dsHttp:InvalidInput
+                |dsHttp:Unauthorized|dsHttp:Forbidden|dsHttp:InternalError { ... }
 
     resource function post employees(EmployeeInsert|EmployeeInsert[] payload)
             returns EmployeeCreated|EmployeeListCreated|dsHttp:InvalidInput|dsHttp:Conflict
-                |dsHttp:ConstraintViolation|dsHttp:InternalError {
+                |dsHttp:ConstraintViolation|dsHttp:Unauthorized|dsHttp:Forbidden
+                |dsHttp:InternalError {
         // In one transaction, posts the records as an array and reads back the created records
         // with one query on their keys.
     }
 
     resource function patch employees/[int id](http:Request request, EmployeeUpdate payload)
             returns Employee|http:NoContent|dsHttp:NotFound|dsHttp:InvalidInput
-                |dsHttp:Conflict|dsHttp:ConstraintViolation|dsHttp:InternalError { ... }
+                |dsHttp:Conflict|dsHttp:ConstraintViolation|dsHttp:Unauthorized|dsHttp:Forbidden
+                |dsHttp:InternalError { ... }
 
     resource function delete employees/[int id](http:Request request)
             returns Employee|http:NoContent|dsHttp:NotFound|dsHttp:InvalidInput
-                |dsHttp:ConstraintViolation|dsHttp:InternalError { ... }
+                |dsHttp:ConstraintViolation|dsHttp:Unauthorized|dsHttp:Forbidden
+                |dsHttp:InternalError { ... }
 }
 ```
 
@@ -671,21 +681,26 @@ service /api on dataserviceListener {
 
   | Operation | Error records |
   |---|---|
-  | Get many | `InvalidInput`, `Forbidden` when it can refuse a relation, `InternalError` |
-  | Get one, get related | `NotFound`, `InvalidInput`, `Forbidden` when it can refuse a relation, `InternalError` |
+  | Get many | `InvalidInput`, `InternalError` |
+  | Get one, get related | `NotFound`, `InvalidInput`, `InternalError` |
   | Create | `InvalidInput`, `Conflict`, `ConstraintViolation`, `InternalError` |
   | Patch | `NotFound`, `InvalidInput`, `Conflict`, `ConstraintViolation`, `InternalError` |
   | Delete | `NotFound`, `InvalidInput`, `ConstraintViolation`, `InternalError` |
 
-  The `401` and `403` responses of `ballerina/http` auth are not among them; see
-  [Risks and assumptions](#risks-and-assumptions).
-- **`Forbidden`:** declared only on a resource that checks a relation: with `auth = true`,
-  get many and get one of an entity with a relation whose `read` scopes its own do not cover,
-  and get related on such a relation. Such a resource also takes the `http:Request`, which is
-  not a parameter of the OpenAPI definition. Other resources never return `Forbidden`, so
-  their OpenAPI definition lists no such `403`. The signatures above declare it, as in a
-  service with `auth = true` where the `read` scopes of `Employee` do not cover those of
-  `Department`.
+- **Auth errors:** with `auth = true`, every resource also declares `Unauthorized`, and every
+  resource whose action has scopes declares `Forbidden`, for the `401` and `403` that
+  `ballerina/http` auth raises and `dsHttp:ErrorInterceptor` answers. A resource whose action
+  has an empty scope list declares `Unauthorized` alone, unless it checks a relation, which
+  also returns `Forbidden`. The resource does not return them itself; they are declared so
+  that the OpenAPI definition lists them with the `DataserviceError` body.
+- **Request parameter:** a resource that checks a relation, or patch and delete whose scopes
+  the `read` scopes do not cover, take the `http:Request`, which is not a parameter of the
+  OpenAPI definition. The signatures above are those of a service with `auth = true`, where
+  the `read` scopes of `Employee` do not cover those of `Department` or its own `update` and
+  `delete` scopes.
+- **Not listed:** a path that matches no resource (`404`) and a method that the path has no
+  resource for (`405`) belong to no resource, so the definition does not list them. They are
+  still answered with the `DataserviceError` body.
 - **Library calls:** the generated service imports `ballerina/dataservice.http` as `dsHttp`
   and passes the entity name and key values to its functions, which build the error response,
   log the error detail, build the `Location` header and check a relation's scopes.
@@ -769,7 +784,9 @@ public type EmployeeListCreated record {|
   program with its message.
 - CORS: a preflight and a cross-origin request with and without `cors` set.
 - The OpenAPI definition: the `Link` header, the definition with the generated summaries and
-  the model's descriptions, Swagger UI, and none of them with `introspection = false`.
+  the model's descriptions, Swagger UI, and none of them with `introspection = false`; every
+  error response with the `DataserviceError` schema and no `ErrorPayload`, and with
+  `auth = true` the `401` and `403` of each resource.
 - Field rules: per rule, the wire types generated, a `ReadOnly` field ignored on create and
   patch, an `Immutable` field rejected on patch, an `Internal` field rejected and never returned,
   and `value` set on create; a direction hidden by `Internal` answering `404` and absent from
@@ -808,8 +825,6 @@ public type EmployeeListCreated record {|
   `error in casting query param : 'filter'`, without naming the field or operator. ✅
 - **The definition is public until [ballerina-library#9432](https://github.com/ballerina-platform/ballerina-library/issues/9432) is fixed.** With `auth = true`, a
   service that must not publish its definition before then sets `introspection = false`.
-- **`401` and `403` are not in the OpenAPI definition.** They come from `ballerina/http` auth
-  and are not in the resources' return types, so the definition does not list them.
 - **A second credential check.** `dsHttp:authorizeRelation` checks the
   credential again after `ballerina/http` has: a JWT signature is verified again unless the
   provider's cache is configured, an OAuth2 token is introspected again unless its cache is
