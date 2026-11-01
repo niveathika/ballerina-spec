@@ -944,16 +944,15 @@ public enum ErrorCode {
     INTERNAL
 }
 
-public type DataserviceError record {
-    # An `ErrorCode` value
-    string code;
+public type DataserviceError record {|
+    ErrorCode code;
     string message;
-};
+|};
 ```
 
-The body is an open record and `code` is a string, so a code or a field added later, such as
-the field that failed, does not break a client. `ErrorCode` lists the codes this version
-defines.
+The body is a closed record, so adding a code or a field to it is a breaking change of the
+libraries, made in a new major version; see
+[Compatibility of the generated API](#compatibility-of-the-generated-api).
 
 Each protocol proposal maps the categories to its own form: an HTTP status code, an entry in
 the GraphQL `errors` array, or an MCP tool result with `isError` set.
@@ -1204,20 +1203,20 @@ no other field, and a client generated from it may reject one. ✅ On Ballerina 
 `Payload binding failed: undefined field 'extra'`. Adding a field to an entity is therefore a
 breaking change for such clients.
 
-The types that the libraries own are open, so the libraries can add to them in a minor
-version without breaking any client:
+The list envelopes, `<Entity>List`, `<Entity>PartialList` and `<Entity>RelatedPartialList`,
+are open, so a field added to them later, such as a total count, does not break a client.
+Clients must ignore unknown fields in them.
 
-| Type | Added later, for example |
-|---|---|
-| `<Entity>List`, `<Entity>PartialList`, `<Entity>RelatedPartialList` | A total count |
-| `DataserviceError` | A code, such as one for a failed precondition, and a field, such as the field that failed |
-
-Clients must ignore unknown fields in these types, and treat an unknown `code` by its category
-in the protocol, such as the HTTP status.
+`DataserviceError` stays closed. As an open record, it would stop Ballerina from narrowing the
+unions that the library functions return, such as `Query|DataserviceError|ConversionError`:
+✅ on Ballerina 2201.14.0, `if query !is Query { return query; }` left `query` typed with
+`Query` when `DataserviceError` was open, and compiled when it was closed. A new error code or
+field, such as one for a failed precondition, is therefore added in a new major version of the
+libraries, and the services are regenerated.
 
 A breaking change can be published beside the old API by generating it with a new `basePath`,
 such as `/api/v2`. Regenerating with a newer persist-tools keeps the wire contract unchanged
-within a major version of the libraries, apart from these additions.
+within a major version of the libraries, apart from additions to the list envelopes.
 
 ### Backward compatibility
 
@@ -1425,6 +1424,15 @@ configurable value of a simple type. One value, such as the port, can then be ov
 are scattered as top-level keys, each needing the `dataservice` prefix to avoid the database
 configuration's names, and a protocol's listener and auth settings add more such keys. A
 record groups them under one table and catches a misspelled field.
+
+### An open error body
+
+`DataserviceError` could be an open record with a string `code`, so that a code or a field
+added later would not break a client. It is not adopted because an open record in a union
+stops Ballerina's type narrowing, as shown in
+[Compatibility of the generated API](#compatibility-of-the-generated-api), so the library
+functions would need another way to return their errors. The cost is that a new code or field
+needs a new major version.
 
 ### A generated configuration type
 
