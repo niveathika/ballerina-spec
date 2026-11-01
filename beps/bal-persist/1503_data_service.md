@@ -3,9 +3,9 @@
 - Author: @niveathika
 - Reviewers: 
 - Created: 2026-09-18
-- Updated: 2026-10-26
+- Updated: 2026-11-01
 - Issue: [#1503](https://github.com/ballerina-platform/ballerina-spec/issues/1503)
-- Status: Submitted
+- Status: Draft
 
 ## Summary
 
@@ -20,7 +20,8 @@ bal persist add --datastore postgresql --dataservice http
 bal build                     # client and data service are generated
 ```
 
-The service has a fixed CRUD shape: seven operations per entity, grouped into four actions. This
+The service has a fixed CRUD shape: six operations per entity plus a get related per relation,
+grouped into four actions. This
 proposal defines that shape, how the tool is configured and how it behaves. It does not define
 how each protocol renders the shape. That is left to follow-up proposals for HTTP, GraphQL and
 MCP, listed under [Future work](#future-work).
@@ -310,7 +311,8 @@ is added through new functions or optional parameters. Each library's specificat
 functions and types that generated code uses, and they change only in a new major version of
 the library.
 
-A model with a data service imports `ballerina/dataservice` with a prefix:
+A model with a data service imports `ballerina/dataservice` for its annotations, under any prefix
+other than `_`:
 
 ```ballerina
 import ballerina/persist as _;
@@ -468,7 +470,8 @@ codes are left to the implementation.
 
 #### Actions and operations
 
-Each exposed entity gets up to seven operations, enabled in four groups called actions:
+Each exposed entity gets up to six operations plus a get related per relation, enabled in four
+groups called actions:
 
 | Action | Operation | Persist client call |
 |---|---|---|
@@ -525,8 +528,8 @@ It is exposed as a patch.
 - **Relations:** get related is addressed by the relation field's name after the entity's
   full key, `<entities>/[key]/<relation>`.
 
-Names starting with `$` are reserved for later query and metadata operations, such as count,
-and are not used for anything else.
+Each protocol proposal reserves names of its own for later query and metadata operations, such
+as count, in a form its protocol allows.
 
 #### Types
 
@@ -613,7 +616,7 @@ and accepted on create and update.
 |---|:-:|:-:|:-:|---|
 | `@dataservice:ReadOnly` | yes | no | no | `Order.status` set by a workflow, `Invoice.total`, `Account.balance` |
 | `@dataservice:Immutable` | yes | yes | no | `Order.customerId`, `Invoice.number`, `Product.sku` |
-| `@dataservice:Internal` | no | no | no | `tenantId`, `deletedAt`, `Product.costPrice` |
+| `@dataservice:Internal` | no | no | no | `User.passwordHash`, `Order.internalNotes`, `Product.costPrice` |
 
 ```ballerina
 type Order record {|
@@ -846,8 +849,10 @@ Persist models these kinds of relation, and each is read with the rules below:
   `department.employees`. `fields` on get related names only the related entity's own fields.
 - **Related type:** an included related record is a `<Target>RelatedPartial`, which has the
   related entity's own fields and no relation fields. Its key fields are always returned.
-- **To-one in `fields`:** an empty to-one relation, whose foreign key is null, and one whose
-  foreign key points at a missing record, are included as `null`.
+- **To-one in `fields`:** a to-one relation with no related record is included as `null`. This
+  happens on the side of a one to one relation that does not hold the foreign key, and when a
+  foreign key points at a missing record. A foreign key is never null: persist rejects a
+  nullable relation field on the side that holds it.
 - **To-many in `fields`:** an included to-many relation is a list envelope, `items` and
   `hasMore`, holding at most `dataserviceConfig.pageSize` records in key order. `hasMore` tells
   the caller to page through the rest with get related. Dotted fields, such as
@@ -1139,7 +1144,9 @@ clause arguments, which the in-memory, Google Sheets and Redis clients do not ha
 every record of an entity for each query. Any other `options.datastore` is an error.
 
 Changing between the SQL datastores needs no change to the model or to callers. `bal build`
-regenerates the client and the service for the new datastore, with the same results.
+regenerates the client and the service for the new datastore, with the same behaviour except
+where the databases differ, such as the collation of string comparisons and sorting; see
+[Filter](#filter).
 
 Whether each field type can be represented in each protocol is defined by the protocol
 proposals. For example, persist's `time:*` record types and `byte[]` need a GraphQL mapping.
@@ -1477,7 +1484,7 @@ listener configuration.
 
 | Area | Adds | Fits into v1 through |
 |---|---|---|
-| More query options | `or` and nested filter groups, a total count, reading only the selected fields from the database | The filter tree; the `<Entity>List` envelope; the reserved `$` names |
+| More query options | `or` and nested filter groups, a total count, reading only the selected fields from the database | The filter tree; the `<Entity>List` envelope; the names each protocol reserves |
 | More auth | Row-level rules and fields visible only to some scopes | Scopes per action; annotations that only narrow |
 | More datastores | The in-memory datastore, with query options applied in the service and its text comparison rules documented | The same query options and results |
 | More relations | Nested writes, filtering and sorting on related fields, relations more than one hop away, many to many through a join entity that holds only the two keys, read as one hop | Get related and relations in `fields`; the `read` action |
