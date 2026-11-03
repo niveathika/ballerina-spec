@@ -608,6 +608,9 @@ clients.
   that sets no field. [Auth](#auth) says how the caller is checked.
 - **Patch and delete without `read`:** when the entity does not allow `read`, patch and delete
   return no record.
+- **Update not read back:** when the persist client saves an update but cannot read the record
+  back, it returns `persist:ReadBackError`. Patch then returns no record, because the update
+  succeeded, and the error is logged.
 - **Empty patch:** a patch that sets no field changes nothing. It is answered as get one when
   the record would be returned, and with no record, without reading, otherwise.
 
