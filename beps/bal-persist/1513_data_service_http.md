@@ -395,8 +395,8 @@ from `ballerina/dataservice`, with the code and message #1503 defines for the ca
 | Conflict | `409` | `CONFLICT` | `persist:AlreadyExistsError` ✅ |
 | Constraint violation | `409` | `CONSTRAINT_VIOLATION` | `persist:ConstraintViolationError` |
 | Invalid input | `400` | `INVALID_INPUT` | a date, time or `byte[]` value that does not parse; a constraint broken on a field of a wire type; an unusable `sort` or `fields` name, a field named twice in `sort`, an empty `fields`, `size` below 1, `offset` below 0 or too large for the `size`; a create above `dataserviceConfig.maxPageSize` records; a `float` key that is not finite |
-| Invalid input | `400` | `INVALID_INPUT` | `ballerina/http` payload, path or query binding ✅, including a body of a media type other than JSON ✅; a constraint broken on an entity without wire types |
-| Invalid input | `405`, or another `4xx` status of `ballerina/http` | `INVALID_INPUT` | a method that the path has no resource for ✅, a body too large |
+| Invalid input | `400` | `INVALID_INPUT` | `ballerina/http` payload, path or query binding ✅, including a body whose `Content-Type` is XML, text, form or binary, which `ballerina/http` binds only to `xml`, `string`, `map<string>` or `byte[]` ✅; a constraint broken on an entity without wire types |
+| Invalid input | `405`, or another `4xx` status of `ballerina/http` | `INVALID_INPUT` | a method that the path has no resource for ✅ |
 | Not found | `404` | `NOT_FOUND` | a path that matches no resource ✅ |
 | Internal | `500` | `INTERNAL` | any other error |
 | Unauthenticated | `401` | `UNAUTHENTICATED` | `DataserviceAuthInterceptor`, before the request is dispatched ✅ |
