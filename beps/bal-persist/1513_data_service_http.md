@@ -72,6 +72,8 @@ isolated service class DataserviceErrorInterceptor {
 ```
 
 - **Base path:** the service's base path is `options.dataservice.basePath`, `/api` by default.
+- **Trailing slash:** a path with a trailing slash, such as `/api/employees/`, addresses the
+  same resource as without it, as `ballerina/http` matches paths. ✅
 - **CORS:** the service takes its CORS settings from `dataserviceConfig.serviceConfig.cors`,
   and allows no cross-origin request by default. ✅ On Ballerina 2201.14.0, a preflight request
   was answered with the origins and methods set in `Config.toml`.
@@ -174,6 +176,9 @@ The resources use the persist-generated types directly: `Employee` in responses,
 | `time:Civil` | an ISO 8601 date-time without an offset, `2024-01-02T10:15:30` |
 | `time:Utc` | an ISO 8601 date-time in UTC, `2024-01-02T10:15:30Z`. In a request, any offset is accepted and converted to UTC |
 
+A `decimal` read from the database keeps the column's scale, so `1.5` in a `DECIMAL(10,2)`
+column is returned as `1.50`. ✅
+
 Ballerina's own JSON form of these types does not suit a client: `time:Utc` is a tuple and
 becomes an array such as `[1704189330, 0.5]`, the other `time:*` types become records, and
 `byte[]` becomes an array of numbers.
@@ -252,7 +257,9 @@ relation; get one and get related on a to-one relation take only `fields`:
 | `fields` | field names, repeated or comma-separated | `fields=name,email` |
 
 Repeated and comma-separated forms bind to the same `string[]`. ✅ Values in the URL are
-percent-encoded as usual.
+percent-encoded as usual. A query parameter that the operation does not take, such as `limit`,
+is ignored, and a repeated `filter`, `size` or `offset` uses its first value, as
+`ballerina/http` binds query parameters. ✅
 
 #### Filter
 
@@ -334,7 +341,9 @@ public type EmployeeRelatedPartialList record {
 };
 ```
 
-`fields=` with no value is answered with `400` and `INVALID_INPUT`.
+`fields=` with no value is answered with `400` and `INVALID_INPUT`. An empty entry in a list
+is dropped, so `fields=name,` is `fields=name`, and `sort=` sorts by key. `sort=-` names an
+empty field and is answered with `400` and `INVALID_INPUT`. ✅
 
 ### Relations
 
@@ -368,6 +377,9 @@ GET /api/departments/2?fields=name,employees.name
   `"department": null`.
 - **Not found:** a request is answered with `404` and `NOT_FOUND` when the record does not
   exist, or when a to-one relation has no related record, with the messages #1503 gives.
+- **Scopes before existence:** with `auth = true`, a relation's scope check runs before the
+  record is read, so a caller without a `read` scope of the related entity gets `403` whether
+  or not the record exists, and does not learn which records exist. ✅
 
 ```ballerina
 resource function get employees/[int id]/department(http:RequestContext ctx, string[]? fields = ())
@@ -466,8 +478,8 @@ final readonly & map<map<string[]>> dataserviceScopes = {
     "departments": {"GET": ["hr:read", "org:read"]}
 };
 
-final dsHttp:Authenticator dataserviceAuthenticator =
-        check new (dataserviceConfig.serviceConfig.auth, dataserviceScopes);
+final dsHttp:Authenticator dataserviceAuthenticator = check new (dataserviceConfig.serviceConfig.auth,
+        dataserviceScopes, dataserviceConfig.serviceConfig.cors);
 
 service http:InterceptableService /api on dataserviceListener {
 
@@ -517,6 +529,14 @@ isolated service class DataserviceAuthInterceptor {
 - **Responses:** `authorize` answers a missing or invalid credential with `401` and
   `UNAUTHENTICATED`, and a caller without a scope of the operation with `403` and `FORBIDDEN`,
   with the messages #1503 gives. ✅
+- **Headers:** the `401` carries one `WWW-Authenticate` challenge per kind of configured
+  provider: `Basic realm="dataservice"` for a user store, and `Bearer realm="dataservice"` for
+  JWT or OAuth2. `ballerina/http` adds CORS headers only to the responses of a resource, so
+  `authorize` adds them to its `401` and `403` from `dataserviceConfig.serviceConfig.cors`, as
+  `ballerina/http` does for a simple cross-origin request: `Access-Control-Allow-Origin` for an
+  allowed origin, and `Access-Control-Allow-Credentials` and `Access-Control-Expose-Headers`
+  when set. ✅ The `404` and `405` of dispatching carry no CORS headers, because no resource
+  matches them.
 - **Get related** and a relation in `fields` require the entity's `read` scopes, as `GET` on
   the entity's collection. For a relation whose related entity's `read` scopes the entity's do
   not cover, as #1503 defines, the resource takes the `http:RequestContext` and calls
@@ -566,13 +586,14 @@ record, and answers a failure with `400`, `INVALID_INPUT` and the message #1503 
 ### OpenAPI definition
 
 Unless `options.dataservice.introspection` is `false`, the service carries
-`@openapi:ServiceInfo {embed: true}`. The compiler then embeds an OpenAPI definition built from
-the service and its doc comments, and `ballerina/http` serves it with Swagger UI: ✅
+`@openapi:ServiceInfo {embed: true, title: "<package>"}`. The compiler then embeds an OpenAPI
+definition built from the service and its doc comments, and `ballerina/http` serves it with
+Swagger UI: ✅
 
 | Request | Response |
 |---|---|
 | `OPTIONS /api` | A `Link` header, `</api/openapi-doc-dygixywsw>;rel="service-desc", </api/swagger-ui-dygixywsw>;rel="swagger-ui"` |
-| `GET /api/openapi-doc-dygixywsw` | The OpenAPI definition. Operation summaries come from the resources' doc comments, and schema and property descriptions from the types' doc comments |
+| `GET /api/openapi-doc-dygixywsw` | The OpenAPI definition, whose `info.title` is the package name in words, such as `Dataservice H2` for `dataservice_h2`. Operation summaries come from the resources' doc comments, and schema and property descriptions from the types' doc comments |
 | `GET /api/swagger-ui-dygixywsw` | Swagger UI for the definition |
 
 - **Paths:** the two paths are fixed by `ballerina/http` and cannot be changed. A client finds
