@@ -271,8 +271,11 @@ later `pull` replaces them along with the model.
 When the `[[tool.persist]]` entry already has `options.dataservice`, `pull` without
 `--dataservice` annotates the pulled entities in the same way, using the entry's protocol, and
 leaves the entry unchanged. A later `pull` therefore keeps the service, rather than writing a
-model with no annotated entity, which would fail the next build. When the entry has no
-`options.dataservice` and the flag is not passed, `pull` behaves exactly as it does today.
+model with no annotated entity, which would fail the next build. Without `--expose-tables`, it
+exposes every pulled table, as `pull --dataservice` does, even one that the replaced model did
+not expose. Keeping the replaced model's selection is deferred; see [Roadmap](#roadmap). When
+the entry has no `options.dataservice` and the flag is not passed, `pull` behaves exactly as it
+does today.
 
 #### Flag combinations
 
@@ -1570,3 +1573,4 @@ listener configuration.
 | Custom operations | Named queries exposed as operations | The reserved `EXECUTE` action |
 | Several protocols | Several services from one entry, on a shared listener | `protocol` also accepting an array |
 | More protocols | OData, SOAP | The reserved `odata` and `soap` values |
+| Pulling again | A later `pull` keeps the entities the replaced model exposed, and exposes a new table only through `--expose-tables` | `--expose-tables` |
