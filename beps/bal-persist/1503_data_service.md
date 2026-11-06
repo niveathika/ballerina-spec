@@ -1127,7 +1127,7 @@ public type Config record {|
 configurable dsHttp:Config dataserviceConfig = {};
 
 final dataservice:PageConfig dataservicePageConfig =
-        check dataservice:pageConfig(dataserviceConfig.pageSize, dataserviceConfig.maxPageSize);
+        check dataservice:toPageConfig(dataserviceConfig.pageSize, dataserviceConfig.maxPageSize);
 ```
 
 The user sets only the fields to change:
@@ -1157,7 +1157,7 @@ unknown field stopped the program with
 `undefined field 'pagesize' provided for closed record`, and a record type that includes
 `Config` and gives `pageSize` another default used that default.
 
-The values are checked at startup by the module-level `check` on `dataservice:pageConfig`. The
+The values are checked at startup by the module-level `check` on `dataservice:toPageConfig`. The
 service does not start, and the program stops with a message, when a value is out of range:
 
 | Case | Message |
