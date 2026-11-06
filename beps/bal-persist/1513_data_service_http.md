@@ -508,13 +508,17 @@ isolated service class DataserviceAuthInterceptor {
   interceptor runs before dispatching and binding, so each of them is answered with `401`. ✅
 - **Scopes:** `dataserviceScopes` maps each collection to the scopes of each HTTP method: `GET`
   for get many, get one and get related, which use the `read` scopes, `POST` for create,
-  `PATCH` for patch and `DELETE` for delete. An action with an empty scope list has no entry,
-  so it needs only a credential, as does a path that is not a collection, such as the OpenAPI
-  definition.
-- **Checking:** `authorize` tries the listener auth handler of each provider in the order of
-  the list, as `ballerina/http` does: `http:ListenerJwtAuthHandler`,
-  `http:ListenerFileUserStoreBasicAuthHandler`, `http:ListenerLdapUserStoreBasicAuthHandler` or
-  `http:ListenerOAuth2Handler`. The first that authenticates the credential decides, and its
+  `PATCH` for patch and `DELETE` for delete. An action with an empty scope list has no entry.
+  An operation without scopes, and a path that is not a collection, such as the OpenAPI
+  definition, take the `scopes` of the provider that authenticated the caller, as
+  `ballerina/http` applies a service's scopes to a resource without scopes of its own. Without
+  those, they need only a credential. ✅
+- **Checking:** `authorize` tries the listener auth handler of each provider that takes the
+  `Authorization` header's scheme, in the order of the list, as `ballerina/http` does:
+  `http:ListenerFileUserStoreBasicAuthHandler` and `http:ListenerLdapUserStoreBasicAuthHandler`
+  for `Basic`, and `http:ListenerJwtAuthHandler` and `http:ListenerOAuth2Handler` for `Bearer`,
+  so a user's password is never sent to an OAuth2 introspection endpoint. ✅ The first that
+  authenticates the credential decides, and its
   `authorize` checks the scopes, so a caller holds the same scopes as with declarative auth. For
   OAuth2, the scopes are the space-separated values of the introspection response's `scopeKey`
   claim, which is what `http:ListenerOAuth2Handler` checks. `authorize` keeps the caller in the
