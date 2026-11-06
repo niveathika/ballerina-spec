@@ -454,7 +454,7 @@ service http:InterceptableService /api on dataserviceListener {
   `Config.toml` does not set it. ✅ On Ballerina 2201.14.0, it stopped with `value not provided
   for non-defaultable required field 'auth' of record '<module>:AuthServiceConfig' in
   configurable variable 'dataserviceConfig.serviceConfig'`. An empty list also stops it at
-  startup, through a module-level `check` on `dsHttp:authProviders`, with the message
+  startup, through a module-level `check` on `dsHttp:initAuthProviders`, with the message
   `The configurable value 'dataserviceConfig.serviceConfig.auth' must hold at least one authentication provider.`
 - **Authentication only:** an action with an empty scope list gets no `@http:ResourceConfig`
   auth, so the service's providers apply alone.
@@ -467,11 +467,11 @@ service http:InterceptableService /api on dataserviceListener {
 - **Get related** and a relation in `fields` require the entity's `read` scopes through
   `@http:ResourceConfig`. For a relation whose related entity's `read` scopes the entity's do
   not cover, as #1503 defines, the resource takes the `http:Request` and calls
-  `dsHttp:authorizeRelation` before reading. It checks the request's credential against the
+  `dsHttp:checkRelationScopes` before reading. It checks the request's credential against the
   related entity's `read` scopes and returns `Forbidden`, with `FORBIDDEN`, when none matches:
 
   ```ballerina
-  dsHttp:Forbidden? forbidden = dsHttp:authorizeRelation(request, "Employee", "department",
+  dsHttp:Forbidden? forbidden = dsHttp:checkRelationScopes(request, "Employee", "department",
           "Department", ["departments:read"]);
   if forbidden is dsHttp:Forbidden {
       return forbidden;
@@ -481,18 +481,18 @@ service http:InterceptableService /api on dataserviceListener {
   `ballerina/http` validates a credential and checks its scopes before the resource runs, but
   does not pass the result to the resource, and its `scopes` accept a caller holding any one of
   them, so they cannot require the scopes of two entities. `dsHttp` therefore creates, once,
-  the listener auth handler of each provider in `dsHttp:authProviders`: `http:ListenerJwtAuthHandler`,
+  the listener auth handler of each provider in `dsHttp:initAuthProviders`: `http:ListenerJwtAuthHandler`,
   `http:ListenerFileUserStoreBasicAuthHandler`, `http:ListenerLdapUserStoreBasicAuthHandler` or
   `http:ListenerOAuth2Handler`. It tries them in the order of the list, as `ballerina/http`
   does, and the first that authenticates the credential decides with its `authorize`. A
   credential that no provider authenticates holds no scope.
 - **Patch and delete results:** for an entity whose `read` scopes do not cover its `update` or
-  `delete` scopes, as #1503 defines, patch and delete call `dsHttp:holdsScope` with the
+  `delete` scopes, as #1503 defines, patch and delete call `dsHttp:hasScope` with the
   entity's `read` scopes, which checks the credential in the same way and returns `true` when
   it holds one of them. Without one, they answer `204` and, for an empty patch, do not read:
 
   ```ballerina
-  if !dsHttp:holdsScope(request, ["employees:read"]) {
+  if !dsHttp:hasScope(request, ["employees:read"]) {
       return http:NO_CONTENT;
   }
   ```
@@ -598,10 +598,10 @@ configurable dsHttp:Config dataserviceConfig = {};
 // configurable dsHttp:AuthConfig dataserviceConfig = ?;
 
 final dataservice:PageConfig dataservicePageConfig =
-        check dataservice:pageConfig(dataserviceConfig.pageSize, dataserviceConfig.maxPageSize);
+        check dataservice:toPageConfig(dataserviceConfig.pageSize, dataserviceConfig.maxPageSize);
 // Only with options.dataservice.auth = true
 final http:ListenerAuthConfig[] dataserviceAuthConfig =
-        check dsHttp:authProviders(dataserviceConfig.serviceConfig.auth);
+        check dsHttp:initAuthProviders(dataserviceConfig.serviceConfig.auth);
 ```
 
 - **Two types for auth:** `AuthConfig` does not include `Config`, because a closed
@@ -828,7 +828,7 @@ public type EmployeeListCreated record {|
   `error in casting query param : 'filter'`, without naming the field or operator. ✅
 - **The definition is public until [ballerina-library#9432](https://github.com/ballerina-platform/ballerina-library/issues/9432) is fixed.** With `auth = true`, a
   service that must not publish its definition before then sets `introspection = false`.
-- **A second credential check.** `dsHttp:authorizeRelation` checks the
+- **A second credential check.** `dsHttp:checkRelationScopes` checks the
   credential again after `ballerina/http` has: a JWT signature is verified again unless the
   provider's cache is configured, an OAuth2 token is introspected again unless its cache is
   configured, and an LDAP user is looked up again. Only relations, and patch and delete, whose
