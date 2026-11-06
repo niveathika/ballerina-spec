@@ -1008,6 +1008,11 @@ generated only when `options.dataservice.auth` is `true`:
   set it, and an empty list also stops it at startup.
 - **Scopes:** with `auth = true`, every operation requires a scope of its action. A caller
   needs any one scope of the list.
+- **Order:** with `auth = true`, the caller is authenticated, and the scopes of the operation's
+  action are checked, before the request is routed to an operation or its input is bound. A
+  caller without a valid credential gets `UNAUTHENTICATED` whatever the request, so binding
+  errors do not reveal the input types to it. The credential is checked once per request, and
+  the checks below use the caller it gave.
 - **Defaults:** an action not listed in `scopes` requires `<resource>:<action>`, where
   `<resource>` is the entity's collection name, as in `employees:read` and
   `projectAssignments:create`.
@@ -1021,18 +1026,18 @@ generated only when `options.dataservice.auth` is `true`:
   when the caller is also allowed to read the entity. The `read` scopes cover the action's when
   every caller allowed the action is also allowed to read: the `read` list is empty, or the
   action's list is not empty and every scope in it is also in the `read` list. Then nothing
-  more is checked. Otherwise the service checks the caller's credential against the `read`
+  more is checked. Otherwise the service checks the caller against the `read`
   scopes when the request runs, and returns no record when it holds none of them. The default
   scopes, such as `employees:update` and `employees:read`, are not covered, so they need the
   check.
 - **Get related** and **a relation in `fields`** require the entity's own `read` scopes, like
   every read of the entity, and the caller must also be allowed to read the related entity.
   When the entity's `read` scopes cover the related entity's, every caller who passed the first
-  check is allowed, and nothing more is checked. Otherwise the service checks the caller's
-  credential against the related entity's `read` scopes when the request runs, and answers
+  check is allowed, and nothing more is checked. Otherwise the service checks the caller
+  against the related entity's `read` scopes when the request runs, and answers
   with `FORBIDDEN` when it holds none of them. The generator works out from the annotations
   which relations need the check; giving both entities a shared `read` scope avoids it. The
-  protocol proposal says how the credential is checked.
+  protocol proposal says how the caller is checked.
 
 ```ballerina
 @dataservice:Expose {scopes: {read: ["hr:read"], delete: ["hr:admin"]}}
